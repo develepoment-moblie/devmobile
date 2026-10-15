@@ -1,6 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/app_user.dart';
-
+import '../config.dart';
 final supabase = Supabase.instance.client;
 
 class AuthService {
@@ -142,5 +142,12 @@ class AuthService {
   /// il faut une Edge Function avec `service_role`.
   static Future<void> deleteProfile(String userId) async {
     await supabase.from('profiles').delete().eq('id', userId);
+  }
+
+  static Future<void> resetPassword(String email) async {
+    await supabase.auth.resetPasswordForEmail(
+      email.trim(),
+      redirectTo: AppConfig.webUrl,
+    );
   }
 }

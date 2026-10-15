@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../widgets/nova_logo.dart';
+import 'forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -78,6 +79,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
               const SizedBox(height: 32),
+
+              // Champ "Nom complet" (uniquement en mode inscription)
               if (_isRegister) ...[
                 TextField(
                   controller: _name,
@@ -85,18 +88,49 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 12),
               ],
+
+              // E-mail
               TextField(
                 controller: _email,
                 keyboardType: TextInputType.emailAddress,
                 decoration: const InputDecoration(labelText: 'E-mail'),
               ),
               const SizedBox(height: 12),
+
+              // Mot de passe
               TextField(
                 controller: _pass,
                 obscureText: true,
                 decoration: const InputDecoration(labelText: 'Mot de passe'),
               ),
-              const SizedBox(height: 24),
+
+              // 🔗 Lien "Mot de passe oublié ?" (visible uniquement en mode connexion)
+              if (!_isRegister)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _loading
+                        ? null
+                        : () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ForgotPasswordScreen(
+                            initialEmail: _email.text.trim(),
+                          ),
+                        ),
+                      );
+                    },
+                    child: const Text(
+                      'Mot de passe oublié ?',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ),
+
+              const SizedBox(height: 8),
+
+              // Bouton principal
               SizedBox(
                 width: double.infinity,
                 child: FilledButton(
@@ -110,6 +144,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       : Text(_isRegister ? 'Créer un compte' : 'Se connecter'),
                 ),
               ),
+
+              // Basculer entre connexion / inscription
               TextButton(
                 onPressed: _loading
                     ? null
