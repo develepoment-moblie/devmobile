@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../main.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
 import '../widgets/nova_logo.dart';
@@ -55,7 +56,7 @@ class _StaffHomeState extends State<StaffHome> {
       ),
       bottomNavigationBar: BottomBar(
         current: _tab,
-        badgeIndex: 3, // 🔴 sur "Services"
+        badgeIndex: 3,
         onTap: (i) => setState(() => _tab = i),
       ),
     );
@@ -93,7 +94,14 @@ class _StaffHomeState extends State<StaffHome> {
                   const SizedBox(width: 8),
                   _CircleIcon(
                     icon: Icons.logout,
-                    onTap: AuthService.logout,
+                    onTap: () async {
+                      await AuthService.logout();
+                      if (!context.mounted) return;
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const AuthGate()),
+                            (route) => false,
+                      );
+                    },
                   ),
                 ],
               ),

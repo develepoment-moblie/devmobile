@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../widgets/nova_logo.dart';
-import 'forgot_password_screen.dart';
+import '../main.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -28,7 +28,13 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _submit() async {
     if (_email.text.trim().isEmpty || _pass.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Remplis e-mail et mot de passe.')),
+        const SnackBar(content: Text('Remplis tous les champs.')),
+      );
+      return;
+    }
+    if (_isRegister && _name.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Remplis ton nom complet.')),
       );
       return;
     }
@@ -36,38 +42,73 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _loading = true);
     try {
       if (_isRegister) {
-        await AuthService.register(
-          _email.text.trim(),
-          _pass.text,
-          _name.text.trim(),
+        final success = await AuthService.register(
+          fullName: _email.text.trim(),       // login key (email)
+          displayName: _name.text.trim(),     // visible name
+          password: _pass.text,
+          role: 'guest',
         );
-        if (mounted) {
+
+        if (!mounted) return;
+
+        if (success) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Compte créé. Connexion...')),
           );
+          final user = await AuthService.login(
+            _email.text.trim(),
+            _pass.text,
+          );
+          if (user != null && mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (_) => const AuthGate()),
+            );
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cet email est déjà utilisé.')),
+          );
         }
       } else {
-        await AuthService.login(_email.text.trim(), _pass.text);
+        final user = await AuthService.login(
+          _email.text.trim(),
+          _pass.text,
+        );
+
+        if (!mounted) return;
+
+        if (user != null) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const AuthGate()),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Email ou mot de passe incorrect.')),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+            .showSnackBar(SnackBar(content: Text('Erreur: $e')));
       }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
-    if (mounted) setState(() => _loading = false);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // 🖼️ Logo réutilisable
+              const SizedBox(height: 40),
               const NovaLogo(size: 120, circular: false),
               const SizedBox(height: 16),
               const Text(
@@ -80,20 +121,26 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 32),
 
-              // Champ "Nom complet" (uniquement en mode inscription)
+              // Nom complet (register only)
               if (_isRegister) ...[
                 TextField(
                   controller: _name,
-                  decoration: const InputDecoration(labelText: 'Nom complet'),
+                  decoration: const InputDecoration(
+                    labelText: 'Nom complet',
+                    prefixIcon: Icon(Icons.person_outline),
+                  ),
                 ),
                 const SizedBox(height: 12),
               ],
 
-              // E-mail
+              // Email (login key)
               TextField(
                 controller: _email,
                 keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(labelText: 'E-mail'),
+                decoration: const InputDecoration(
+                  labelText: 'E-mail',
+                  prefixIcon: Icon(Icons.email_outlined),
+                ),
               ),
               const SizedBox(height: 12),
 
@@ -101,36 +148,14 @@ class _LoginScreenState extends State<LoginScreen> {
               TextField(
                 controller: _pass,
                 obscureText: true,
-                decoration: const InputDecoration(labelText: 'Mot de passe'),
+                decoration: const InputDecoration(
+                  labelText: 'Mot de passe',
+                  prefixIcon: Icon(Icons.lock_outline),
+                ),
               ),
 
-              // 🔗 Lien "Mot de passe oublié ?" (visible uniquement en mode connexion)
-              if (!_isRegister)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: _loading
-                        ? null
-                        : () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => ForgotPasswordScreen(
-                            initialEmail: _email.text.trim(),
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Text(
-                      'Mot de passe oublié ?',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                  ),
-                ),
+              const SizedBox(height: 24),
 
-              const SizedBox(height: 8),
-
-              // Bouton principal
               SizedBox(
                 width: double.infinity,
                 child: FilledButton(
@@ -145,7 +170,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
 
-              // Basculer entre connexion / inscription
               TextButton(
                 onPressed: _loading
                     ? null

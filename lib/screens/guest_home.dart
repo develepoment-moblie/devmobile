@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../main.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
 import '../widgets/nova_logo.dart';
@@ -58,7 +59,6 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        // 🖼️ Logo réutilisable
         const NovaLogo(size: 40),
         const SizedBox(width: 10),
         const Text(
@@ -78,7 +78,14 @@ class _Header extends StatelessWidget {
         const SizedBox(width: 8),
         _CircleIconButton(
           icon: Icons.logout,
-          onTap: AuthService.logout,
+          onTap: () async {
+            await AuthService.logout();
+            if (!context.mounted) return;
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (_) => const AuthGate()),
+                  (route) => false,
+            );
+          },
         ),
       ],
     );
@@ -301,7 +308,7 @@ class _HeroCard extends StatelessWidget {
   }
 }
 
-// ============ SEARCH CARD (dynamique) ============
+// ============ SEARCH CARD ============
 class _SearchCard extends StatefulWidget {
   const _SearchCard();
 
@@ -466,7 +473,7 @@ class _SearchCardState extends State<_SearchCard> {
   }
 }
 
-// ============ DATE FIELD (cliquable) ============
+// ============ DATE FIELD ============
 class _DateField extends StatelessWidget {
   final String label;
   final String value;

@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
+import '../main.dart';
 import '../models/app_user.dart';
+import '../models/priority.dart';
 import '../services/auth_service.dart';
+import '../services/database_helper.dart';
+import '../utils/icon_mapper.dart';
 import '../widgets/nova_logo.dart';
 import '../widgets/bottom_bar.dart';
 import '../widgets/placeholder_tab.dart';
 import 'manage_users.dart';
+import 'manage_priorities.dart';
 import 'tabs/profil_tab.dart';
 
 // ============ PALETTE ============
@@ -28,9 +33,10 @@ class ManagerHome extends StatefulWidget {
 
 class _ManagerHomeState extends State<ManagerHome> {
   int _tab = 0;
-
-  // 🔴 badge sur "Services"
   static const int? _badgeIndex = 3;
+
+  late Future<List<Priority>> _prioritiesFuture;
+  late Future<List<Map<String, dynamic>>> _statsFuture;
 
   static const _jours = [
     'LUNDI', 'MARDI', 'MERCREDI', 'JEUDI',
@@ -44,6 +50,30 @@ class _ManagerHomeState extends State<ManagerHome> {
   String get _dateAujourdhui {
     final now = DateTime.now();
     return '${_jours[now.weekday - 1]} ${now.day} ${_mois[now.month - 1]}';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  void _reload() {
+    _prioritiesFuture = DatabaseHelper.instance
+        .getAllPriorities()
+        .then((rows) => rows.map((m) => Priority.fromMap(m)).toList());
+    _statsFuture = DatabaseHelper.instance.getAllStats();
+  }
+
+  Future<void> _openManagePriorities() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const ManagePrioritiesScreen(),
+      ),
+    );
+    _reload();
+    if (mounted) setState(() {});
   }
 
   @override
@@ -68,7 +98,7 @@ class _ManagerHomeState extends State<ManagerHome> {
               icon: Icons.room_service_outlined,
               title: 'Services',
             ),
-            ProfilTab(user: widget.user),   // 👈 5ᵉ onglet
+            ProfilTab(user: widget.user),
           ],
         ),
       ),
@@ -80,200 +110,276 @@ class _ManagerHomeState extends State<ManagerHome> {
     );
   }
 
-  // ============ ONGLET ACCUEIL ============
   Widget _buildAccueil() {
     final title =
     widget.user.role == 'admin' ? 'ESPACE ADMIN' : 'ESPACE MANAGER';
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ===== HEADER =====
-          Row(
-            children: [
-              const NovaLogo(size: 40),
-              const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'NOVA PARIS',
-                    style: TextStyle(
-                      fontSize: 10,
-                      letterSpacing: 2,
-                      fontWeight: FontWeight.w700,
-                      color: _muted,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: _darkGreen,
-                    ),
-                  ),
-                ],
-              ),
-              const Spacer(),
-              _CircleIcon(icon: Icons.notifications_none, onTap: () {}),
-              const SizedBox(width: 8),
-              _CircleIcon(icon: Icons.logout, onTap: AuthService.logout),
-            ],
-          ),
-          const SizedBox(height: 24),
-
-          // ===== DATE =====
-          Text(
-            _dateAujourdhui,
-            style: const TextStyle(
-              fontSize: 10,
-              letterSpacing: 1.5,
-              fontWeight: FontWeight.w600,
-              color: _muted,
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // ===== SALUTATION =====
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: Column(
+    return RefreshIndicator(
+      color: _darkGreen,
+      onRefresh: () async {
+        _reload();
+        await _prioritiesFuture;
+        await _statsFuture;
+      },
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ===== HEADER =====
+            Row(
+              children: [
+                const NovaLogo(size: 40),
+                const SizedBox(width: 10),
+                Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Bonjour ${widget.user.firstName},',
-                      style: const TextStyle(
-                        fontSize: 26,
+                    const Text(
+                      'NOVA PARIS',
+                      style: TextStyle(
+                        fontSize: 10,
+                        letterSpacing: 2,
                         fontWeight: FontWeight.w700,
-                        color: _darkGreen,
-                        height: 1.15,
+                        color: _muted,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      "L'hôtel est prêt pour la journée.",
-                      style: TextStyle(fontSize: 13, color: _muted),
+                    const SizedBox(height: 2),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: _darkGreen,
+                      ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 12),
-              _AvatarBadge(name: widget.user.firstName),
-            ],
-          ),
-          const SizedBox(height: 20),
-
-          // ===== STATUT =====
-          const _StatusCard(
-            icon: Icons.auto_awesome,
-            title: '83% des chambres prêtes',
-            subtitle: '4 chambres avant 15h',
-          ),
-          const SizedBox(height: 12),
-
-          // ===== STATS =====
-          const Row(
-            children: [
-              Expanded(
-                child: _StatCard(
-                  label: 'Occupation',
-                  value: '82%',
-                  delta: '6,4%',
-                  deltaUp: true,
+                const Spacer(),
+                _CircleIcon(icon: Icons.notifications_none, onTap: () {}),
+                const SizedBox(width: 8),
+                _CircleIcon(
+                  icon: Icons.logout,
+                  onTap: () async {
+                    await AuthService.logout();
+                    if (!context.mounted) return;
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const AuthGate()),
+                          (route) => false,
+                    );
+                  },
                 ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: _StatCard(
-                  label: 'Revenu',
-                  value: '24,8k€',
-                  delta: '8,1%',
-                  deltaUp: true,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 28),
+              ],
+            ),
+            const SizedBox(height: 24),
 
-          // ===== PRIORITÉS =====
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Priorités',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: _darkGreen,
-                ),
-              ),
-              TextButton(
-                onPressed: () {},
-                child: const Text(
-                  'Tout voir',
-                  style: TextStyle(color: _muted, fontSize: 12),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          _PriorityTile(
-            icon: Icons.ac_unit,
-            title: 'Climatisation en panne',
-            subtitle: 'Ch. 305 · Urgent',
-            iconColor: _dangerTxt,
-            iconBg: _danger,
-            onTap: () {},
-          ),
-          const SizedBox(height: 10),
-          _PriorityTile(
-            icon: Icons.calendar_today_outlined,
-            title: 'Arrivée VIP',
-            subtitle: 'Chloé Laurent · 14:30',
-            iconColor: _darkGreen,
-            iconBg: const Color(0xFFE5E9DD),
-            onTap: () {},
-          ),
-          const SizedBox(height: 10),
-          _PriorityTile(
-            icon: Icons.king_bed_outlined,
-            title: 'Chambre à valider',
-            subtitle: 'Ch. 204 · Ménage',
-            iconColor: _terra,
-            iconBg: const Color(0xFFF0E0D5),
-            onTap: () {},
-          ),
-          const SizedBox(height: 28),
-
-          // ===== BOUTON GÉRER =====
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: _darkGreen,
-              minimumSize: const Size.fromHeight(52),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
+            Text(
+              _dateAujourdhui,
+              style: const TextStyle(
+                fontSize: 10,
+                letterSpacing: 1.5,
+                fontWeight: FontWeight.w600,
+                color: _muted,
               ),
             ),
-            icon: const Icon(Icons.people_alt_outlined),
-            label: const Text('Gérer les utilisateurs'),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const ManageUsersScreen(),
+            const SizedBox(height: 8),
+
+            // ===== SALUTATION =====
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Bonjour ${widget.user.firstName},',
+                        style: const TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w700,
+                          color: _darkGreen,
+                          height: 1.15,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        "L'hôtel est prêt pour la journée.",
+                        style: TextStyle(fontSize: 13, color: _muted),
+                      ),
+                    ],
+                  ),
                 ),
-              );
-            },
-          ),
-        ],
+                const SizedBox(width: 12),
+                _AvatarBadge(name: widget.user.firstName),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            // ===== STATUT =====
+            const _StatusCard(
+              icon: Icons.auto_awesome,
+              title: '83% des chambres prêtes',
+              subtitle: '4 chambres avant 15h',
+            ),
+            const SizedBox(height: 12),
+
+            // ===== STATS DYNAMIQUES =====
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: _statsFuture,
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(
+                    height: 90,
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                final stats = snap.data ?? [];
+                if (stats.isEmpty) {
+                  return const SizedBox(height: 90);
+                }
+                return Row(
+                  children: [
+                    for (int i = 0; i < stats.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 12),
+                      Expanded(
+                        child: _StatCard(
+                          label: stats[i]['label'] as String,
+                          value: stats[i]['value'] as String,
+                          delta: stats[i]['delta'] as String,
+                          deltaUp: (stats[i]['delta_up'] as int) == 1,
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 28),
+
+            // ===== PRIORITÉS =====
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Priorités',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _darkGreen,
+                  ),
+                ),
+                TextButton(
+                  onPressed: _openManagePriorities,
+                  child: const Text(
+                    'Tout voir',
+                    style: TextStyle(color: _muted, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            FutureBuilder<List<Priority>>(
+              future: _prioritiesFuture,
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                final items = snap.data ?? [];
+                if (items.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text(
+                      'Aucune priorité pour le moment.',
+                      style: TextStyle(color: _muted),
+                    ),
+                  );
+                }
+                return Column(
+                  children: items.map((p) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _PriorityTile(
+                        icon: iconFromString(p.icon),
+                        title: p.title,
+                        subtitle: p.subtitle,
+                        iconColor: _priorityTextColor(p.colorType),
+                        iconBg: _priorityBgColor(p.colorType),
+                        onTap: _openManagePriorities,
+                      ),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+
+            const SizedBox(height: 28),
+
+            // ===== BOUTON GÉRER UTILISATEURS =====
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _darkGreen,
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              icon: const Icon(Icons.people_alt_outlined),
+              label: const Text('Gérer les utilisateurs'),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ManageUsersScreen(),
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 12),
+
+            // ===== BOUTON GÉRER PRIORITÉS =====
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _terra,
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              icon: const Icon(Icons.priority_high_rounded),
+              label: const Text('Gérer les priorités'),
+              onPressed: _openManagePriorities,
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  Color _priorityBgColor(String type) {
+    switch (type) {
+      case 'danger':
+        return _danger;
+      case 'terra':
+        return const Color(0xFFF0E0D5);
+      default:
+        return const Color(0xFFE5E9DD);
+    }
+  }
+
+  Color _priorityTextColor(String type) {
+    switch (type) {
+      case 'danger':
+        return _dangerTxt;
+      case 'terra':
+        return _terra;
+      default:
+        return _darkGreen;
+    }
   }
 }
 

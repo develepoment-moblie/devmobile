@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../main.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
 
@@ -14,7 +15,14 @@ class MaintenanceHome extends StatelessWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
-            onPressed: AuthService.logout,
+            onPressed: () async {
+              await AuthService.logout();
+              if (!context.mounted) return;
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const AuthGate()),
+                    (route) => false,
+              );
+            },
           ),
         ],
       ),
@@ -28,8 +36,10 @@ class MaintenanceHome extends StatelessWidget {
               style: const TextStyle(fontSize: 14, color: Color(0xFFC4704F)),
             ),
             const SizedBox(height: 8),
-            const Text('3 interventions actives',
-                style: TextStyle(fontSize: 30)),
+            const Text(
+              '3 interventions actives',
+              style: TextStyle(fontSize: 30),
+            ),
           ],
         ),
       ),
