@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
+import '../login_screen.dart'; // <-- Import login screen
 
 // ============ PALETTE ============
 const _cream     = Color(0xFFF6F1EA);
@@ -21,7 +22,6 @@ class ProfilTab extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ===== AVATAR + NOM + EMAIL + BADGE =====
           Center(
             child: Column(
               children: [
@@ -68,12 +68,9 @@ class ProfilTab extends StatelessWidget {
               ],
             ),
           ),
-
           const SizedBox(height: 28),
           Divider(color: Colors.black.withOpacity(0.06), height: 1),
           const SizedBox(height: 24),
-
-          // ===== 3 STATS =====
           Row(
             children: [
               const _MiniStat(value: '3', label: 'Séjours'),
@@ -83,10 +80,7 @@ class ProfilTab extends StatelessWidget {
               _MiniStat(value: '${user.points}', label: 'Points'),
             ],
           ),
-
           const SizedBox(height: 32),
-
-          // ===== MON ESPACE CLIENT =====
           const Text(
             'Mon espace client',
             style: TextStyle(
@@ -96,7 +90,6 @@ class ProfilTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-
           _MenuTile(
             icon: Icons.calendar_today_outlined,
             title: 'Mes réservations',
@@ -131,10 +124,7 @@ class ProfilTab extends StatelessWidget {
             subtitle: 'Profil complété',
             onTap: () {},
           ),
-
           const SizedBox(height: 32),
-
-          // ===== CHANGER D'ESPACE =====
           const Text(
             "Changer d'espace",
             style: TextStyle(
@@ -144,7 +134,6 @@ class ProfilTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-
           _RoleSwitchTile(
             icon: Icons.admin_panel_settings_outlined,
             title: user.role == 'staff' ? 'Espace personnel' : 'Espace manager',
@@ -154,10 +143,7 @@ class ProfilTab extends StatelessWidget {
             roleLabel: user.role == 'staff' ? 'Personnel' : 'Manager',
             onTap: () {},
           ),
-
           const SizedBox(height: 24),
-
-          // ===== BOUTON DÉCONNEXION =====
           SizedBox(
             width: double.infinity,
             height: 50,
@@ -174,7 +160,20 @@ class ProfilTab extends StatelessWidget {
                 'Se déconnecter',
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
-              onPressed: AuthService.logout,
+              onPressed: () async {
+                // 1. Await the logout to clear SharedPreferences
+                await AuthService.logout();
+
+                // 2. Check if context is still mounted
+                if (!context.mounted) return;
+
+                // 3. Navigate to LoginScreen and remove all previous routes
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (context) => const LoginScreen()),
+                      (route) => false,
+                );
+              },
             ),
           ),
         ],
@@ -183,7 +182,8 @@ class ProfilTab extends StatelessWidget {
   }
 }
 
-// ============ AVATAR GRAND ============
+// ... REST OF YOUR WIDGETS (_AvatarBig, _MiniStat, _MiniDivider, _MenuTile, _RoleSwitchTile) ...
+// (Keep them exactly as you had them, no changes needed below this point)
 class _AvatarBig extends StatelessWidget {
   final String name;
   const _AvatarBig({required this.name});
@@ -213,7 +213,6 @@ class _AvatarBig extends StatelessWidget {
   }
 }
 
-// ============ MINI STAT ============
 class _MiniStat extends StatelessWidget {
   final String value;
   final String label;
@@ -254,7 +253,6 @@ class _MiniDivider extends StatelessWidget {
   }
 }
 
-// ============ MENU TILE ============
 class _MenuTile extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -326,7 +324,6 @@ class _MenuTile extends StatelessWidget {
   }
 }
 
-// ============ ROLE SWITCH TILE ============
 class _RoleSwitchTile extends StatelessWidget {
   final IconData icon;
   final String title;

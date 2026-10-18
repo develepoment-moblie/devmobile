@@ -76,6 +76,78 @@ class _ManagerHomeState extends State<ManagerHome> {
     if (mounted) setState(() {});
   }
 
+  // ============ LOGOUT ============
+  Future<void> _handleLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardWhite,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text(
+          'Déconnexion',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: _darkGreen,
+          ),
+        ),
+        content: const Text(
+          'Voulez-vous vraiment vous déconnecter ?',
+          style: TextStyle(fontSize: 13, color: _muted),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(
+              'Annuler',
+              style: TextStyle(color: _muted),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Déconnexion',
+              style: TextStyle(
+                color: _dangerTxt,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    // Show a loading indicator while logging out
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: CircularProgressIndicator(color: _darkGreen),
+      ),
+    );
+
+    try {
+      await AuthService.logout();
+    } catch (_) {
+      // Ignore: we still navigate out to be safe.
+    }
+
+    if (!mounted) return;
+    // Close the loading dialog
+    Navigator.of(context, rootNavigator: true).pop();
+
+    // Replace entire stack with the auth gate
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AuthGate()),
+          (route) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -160,14 +232,7 @@ class _ManagerHomeState extends State<ManagerHome> {
                 const SizedBox(width: 8),
                 _CircleIcon(
                   icon: Icons.logout,
-                  onTap: () async {
-                    await AuthService.logout();
-                    if (!context.mounted) return;
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(builder: (_) => const AuthGate()),
-                          (route) => false,
-                    );
-                  },
+                  onTap: _handleLogout,
                 ),
               ],
             ),

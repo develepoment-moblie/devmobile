@@ -21,7 +21,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 5,
+      version: 6, // ⬅️ bumped from 5
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -36,7 +36,9 @@ class DatabaseHelper {
       display_name TEXT NOT NULL,
       password TEXT NOT NULL,
       role TEXT NOT NULL,
-      points INTEGER NOT NULL DEFAULT 0
+      points INTEGER NOT NULL DEFAULT 0,
+      security_question TEXT,
+      security_answer TEXT
     )
     ''');
 
@@ -71,6 +73,8 @@ class DatabaseHelper {
       'password': 'admin1234!',
       'role': 'admin',
       'points': 0,
+      'security_question': 'Nom de votre premier animal ?',
+      'security_answer': 'admin',
     });
 
     // ============ SEED: Priorities ============
@@ -114,10 +118,23 @@ class DatabaseHelper {
   }
 
   Future _upgradeDB(Database db, int oldVersion, int newVersion) async {
-    await db.execute('DROP TABLE IF EXISTS users');
-    await db.execute('DROP TABLE IF EXISTS priorities');
-    await db.execute('DROP TABLE IF EXISTS stats');
-    await _createDB(db, newVersion);
+    // Migration for existing installs (v5 → v6):
+    // add security_question/security_answer to users table
+    if (oldVersion < 6) {
+      final columns = await db.rawQuery('PRAGMA table_info(users)');
+      final hasQuestion =
+      columns.any((c) => c['name'] == 'security_question');
+      if (!hasQuestion) {
+        await db.execute(
+            'ALTER TABLE users ADD COLUMN security_question TEXT');
+      }
+      final hasAnswer =
+      columns.any((c) => c['name'] == 'security_answer');
+      if (!hasAnswer) {
+        await db.execute(
+            'ALTER TABLE users ADD COLUMN security_answer TEXT');
+      }
+    }
   }
 
   // ==================================================
@@ -136,7 +153,12 @@ class DatabaseHelper {
     return null;
   }
 
-  Future<int> insertUser(AppUser user, String password) async {
+  Future<int> insertUser(
+      AppUser user,
+      String password, {
+        String? securityQuestion,
+        String? securityAnswer,
+      }) async {
     final db = await instance.database;
     return await db.insert('users', {
       'full_name': user.fullName,
@@ -144,6 +166,8 @@ class DatabaseHelper {
       'password': password,
       'role': user.role,
       'points': user.points,
+      'security_question': securityQuestion,
+      'security_answer': securityAnswer?.trim().toLowerCase(),
     });
   }
 
@@ -163,6 +187,38 @@ class DatabaseHelper {
     );
     if (results.isNotEmpty) return AppUser.fromMap(results.first);
     return null;
+  }
+
+  // ===== PASSWORD RESET SUPPORT =====
+
+  Future<Map<String, dynamic>?> getUserByEmail(String email) async {
+    final db = await instance.database;
+    final results = await db.query(
+      'users',
+      where: 'full_name = ?',
+      whereArgs: [email.trim()],
+      limit: 1,
+    );
+    return results.isEmpty ? null : results.first;
+  }
+
+  Future<bool> verifySecurityAnswer(String email, String answer) async {
+    final user = await getUserByEmail(email);
+    if (user == null) return false;
+    final stored =
+    (user['security_answer'] as String?)?.trim().toLowerCase();
+    final provided = answer.trim().toLowerCase();
+    return stored != null && stored.isNotEmpty && stored == provided;
+  }
+
+  Future<int> resetPassword(String email, String newPassword) async {
+    final db = await instance.database;
+    return await db.update(
+      'users',
+      {'password': newPassword},
+      where: 'full_name = ?',
+      whereArgs: [email.trim()],
+    );
   }
 
   Future<int> updateRole(int id, String newRole) async {
@@ -235,7 +291,7 @@ class DatabaseHelper {
     });
   }
 
-  /// 🔧 NEW: update an existing priority (used by ManagePrioritiesScreen)
+  /// 🔧 update an existing priority (used by ManagePrioritiesScreen)
   Future<int> updatePriority(Priority p) async {
     if (p.id == null) return 0;
     final db = await instance.database;

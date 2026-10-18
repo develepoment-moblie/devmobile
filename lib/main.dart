@@ -15,12 +15,16 @@ import 'screens/maintenance_home.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // === INITIALIZE DATABASE ===
   if (kIsWeb) {
     databaseFactory = databaseFactoryFfiWeb;
   } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
+
+  // === Restore session before starting the app ===
+  await AuthService.initSession();
 
   runApp(const NovaApp());
 }
