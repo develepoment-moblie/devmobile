@@ -60,7 +60,7 @@ Future<void> main() async {
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
-                  'Les données n’ont pas pu être ouvertes. Vérifiez l’espace disponible puis relancez l’application. Consultez SQLITE.md dans le projet si le problème persiste.',
+                  'Les données n’ont pas pu être ouvertes. Vérifiez l’espace disponible puis relancez l’application. Consultez docs/SQLITE.md dans le projet si le problème persiste.',
                   textAlign: TextAlign.center,
                 ),
               ),

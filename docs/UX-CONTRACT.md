@@ -79,7 +79,7 @@ backup_screen_test.dart (validation, annulation, confirmation, texte 200 %).
 
 ## Espace agent
 
-Sources métier : AGENTS.md, PRODUCT.md et les permissions de SqliteHousekeeping.
+Sources métier : ../AGENTS.md, PRODUCT.md et les permissions de SqliteHousekeeping.
 AuthGate active l’espace agent pour le rôle staff. MainScreen conserve la pile
 Retour et trois onglets : Mon service, Mes chambres, Profil. La gouvernante garde
 son espace et ses permissions. Aucun compte ni rôle n’est créé par le module ménage.

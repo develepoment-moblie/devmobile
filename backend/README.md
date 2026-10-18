@@ -2,7 +2,7 @@
 
 Le lancement normal utilise SQLite sur le téléphone pour les deux modules.
 Ce dossier conserve l'ancienne API Node/SQLite de démonstration du ménage.
-Voir ../SQLITE.md pour l'application fusionnée locale.
+Voir ../docs/SQLITE.md pour l'application fusionnée locale.
 
 API Node.js 24+ et SQLite, sans dépendances npm. Le fichier de base est sur le
 serveur : les téléphones qui utilisent ce serveur partagent les mêmes données.

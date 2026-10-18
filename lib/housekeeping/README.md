@@ -45,4 +45,4 @@ HousekeepingScreen(data: hotelData);
 
 `lib/housekeeping.dart` reste une entrée de compatibilité. Les adaptateurs SQLite
 utilisent le contrat partagé LocalSessionStore ; les écrans gardent les mêmes
-interfaces et les règles métier. Voir SQLITE.md à la racine.
+interfaces et les règles métier. Voir ../../docs/SQLITE.md.

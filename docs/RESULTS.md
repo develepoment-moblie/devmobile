@@ -43,7 +43,7 @@ L'installation et le parcours interactif de cette version sur téléphone resten
 - Dernière vérification ciblée : 15 tests de navigation réussis.
 - Couverture : pages imbriquées, notifications/détails, onglets, feuilles, brouillons,
   sauvegarde en cours, clavier, expiration, déconnexion et reprise de l'application.
-- Rendu inspecté : test/goldens/back_exit_large_text.png, 320 x 568, texte 200 %,
+- Rendu inspecté : ../test/goldens/back_exit_large_text.png, 320 x 568, texte 200 %,
   Manrope et MaterialIcons ; autres baselines Figma conservées.
 - APK Android arm64 debug compilé avec succès.
 - Le test matériel du geste/bouton Retour reste à effectuer sur le téléphone après
@@ -52,14 +52,14 @@ L'installation et le parcours interactif de cette version sur téléphone resten
 ## Écran noir après réouverture — 16 octobre 2026
 
 - Reproduction confirmée par l'utilisateur sur l'APK debug installé depuis Android Studio.
-- Capture du noir : verification/black-screen-debug.png. Aucun crash Dart enregistré.
+- Capture du noir : ../verification/black-screen-debug.png. Aucun crash Dart enregistré.
 - Le processus debug portait pause_isolates_on_start=true ; les états observés
   n'établissent pas à eux seuls la cause interne exacte du blocage.
 - Flutter 3.47.7, téléphone Xiaomi 21081111RG / MT6893, Android 14 ; Impeller GLES.
 - Comparaison sans changement de code ni de backend graphique : APK release arm64
   compilé et installé avec adb install -r. Les données SQLite ont été conservées.
 - Démarrage à froid réussi ; recréation de l'activité dans le même processus réussie
-  (warm launch 224 ms). Captures reopen-release-before.png et reopen-release-warm.png.
+(warm launch 224 ms). Captures ../verification/reopen-release-before.png et ../verification/reopen-release-warm.png.
 - L'utilisateur a ensuite confirmé que double Retour → icône ouvre normalement
   la connexion sans forcer l'arrêt du processus.
 - Configuration Android Studio ajoutée : Nova Paris - Phone (release), --release.
@@ -77,7 +77,7 @@ L'installation et le parcours interactif de cette version sur téléphone resten
   testé par échec SQL forcé. Aucun remplacement de la base du téléphone en test.
 - flutter analyze : aucune anomalie. flutter test : 83 réussis, 1 test historique
   dépendant du serveur ignoré. 9 tests session/sauvegarde, 4 tests écran ajoutés.
-- Capture test/goldens/backup_large_text.png inspectée à 320 × 568, texte 200 % ;
+- Capture ../test/goldens/backup_large_text.png inspectée à 320 × 568, texte 200 % ;
   formulaire défilant sans débordement. Annulation, double soumission, Retour
   pendant opération et confirmation de remplacement vérifiés.
 - Le sélecteur Android reste à tester manuellement sur le téléphone (export puis

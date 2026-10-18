@@ -148,4 +148,4 @@ Pour le Web, seule la démo JSON historique est disponible.
 - HOUSEKEEPING_API_URL / HOUSEKEEPING_TOKEN : ancienne API Node/SQLite.
 
 Utiliser --dart-define pour ces arguments uniquement si la démonstration est voulue.
-Voir OFFLINE.md et backend/README.md. Leurs données restent indépendantes.
+Voir OFFLINE.md et ../backend/README.md. Leurs données restent indépendantes.
