@@ -1,0 +1,7 @@
+{
+  "name": "nova-housekeeping-api",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": { "start": "node server.mjs", "test": "node --test test/*.test.mjs", "dev:setup": "node dev-setup.mjs" }
+}

@@ -1,0 +1,19 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["lib"],
+  "locale": "fr-FR",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],
+  "ownership": {"Select/Listbox": "native"},
+  "requiredCommands": ["analyze", "unit", "build"],
+  "commands": {
+    "analyze": "flutter analyze",
+    "unit": "flutter test",
+    "build": "flutter build apk --release --target-platform android-arm64"
+  },
+  "evidence": {
+    "crudFullFlow": "test/housekeeping_test.dart",
+    "failurePaths": "test/housekeeping_test.dart"
+  }
+}
+
