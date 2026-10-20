@@ -4,9 +4,12 @@ import 'package:nova_paris/app/modules.dart';
 import 'package:nova_paris/app/nova_app.dart';
 import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_session.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite/sqflite.dart';
 
 // Visits the main screens on a real phone and saves a screenshot of each.
-// Navigation only: no data is changed.
+// It uses its own database file (nova_paris_tour.db, recreated each run),
+// so the phone's real data is never read or changed.
 //   flutter drive --driver=test_driver/integration_test.dart \
 //     --target=integration_test/screen_tour_test.dart -d <device>
 // Screenshots: build/screen_tour/*.png
@@ -14,8 +17,11 @@ void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('screen tour', (tester) async {
+    final path = p.join(await getDatabasesPath(), 'nova_paris_tour.db');
+    await deleteDatabase(path);
     final database = await AppDatabase.open(
       schemas: [for (final module in novaModules) ?module.schema],
+      path: path,
     );
     final session = AppSession(
       database: database,
@@ -40,7 +46,12 @@ void main() {
       await tester.ensureVisible(finder.first);
       await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(finder.first);
-      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(milliseconds: 600));
+    }
+
+    Future<void> back() async {
+      await tester.binding.handlePopRoute();
+      await tester.pump(const Duration(milliseconds: 700));
     }
 
     Future<void> signIn(String name) async {
@@ -51,34 +62,30 @@ void main() {
 
     Future<void> signOut() async {
       await tap(find.byTooltip('Mon profil'));
-      await shot('profile');
       await tap(find.text('Se déconnecter'));
       await tester.pump(const Duration(seconds: 1));
     }
 
-    Future<void> back() async {
-      await tester.binding.handlePopRoute();
-      await tester.pump(const Duration(milliseconds: 600));
-    }
-
     await shot('login');
-    await tap(find.text('Entrer (mode test)'));
-    await shot('login_error');
 
-    // Supervisor: every workspace tab and one room.
+    // Supervisor.
     await signIn('Amina');
     await tap(find.text('Chambres et ménage'));
     await shot('supervisor_home');
-    for (final tab in ['Départs', 'Chambres', 'Stock', 'Ménage']) {
+    for (final tab in ['Chambres', 'Stock', 'Ménage']) {
       await tap(find.text(tab).last);
       await shot('supervisor_${tab.toLowerCase()}');
     }
     await tap(find.text('Chambres').last);
-    await tap(find.text('Chambre 101'));
-    await shot('room_101');
+    await tap(find.text('Chambre 112'));
+    await shot('room_112_occupied');
     await back();
-    await tap(find.byTooltip('Notifications'));
-    await shot('notifications');
+    await tap(find.text('Accueil').last);
+    await tap(find.text('Objets trouvés'));
+    await shot('lost_items');
+    await back();
+    await tap(find.text('Statistiques'));
+    await shot('statistics');
     await back();
     await tap(find.byTooltip('Retour à l’accueil'));
     await tester.pump(const Duration(milliseconds: 600));
@@ -88,8 +95,6 @@ void main() {
     await signIn('Sarah');
     await tap(find.text('Chambres et ménage'));
     await shot('agent_dashboard');
-    await tap(find.text('Mes chambres').last);
-    await shot('agent_rooms');
     await tap(find.text('Chambre 214'));
     await shot('agent_room_214');
     await back();
@@ -97,15 +102,25 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     await signOut();
 
-    // Manager: room catalog, then a module still under construction.
+    // Manager: floors, a floor's rooms, a room, adding rooms, task lists.
     await signIn('Manager');
     await tap(find.text('Chambres et ménage'));
-    await shot('manager_catalog');
+    await shot('manager_floors');
+    await tap(find.text('Étage 3'));
+    await shot('manager_floor_3');
+    await tap(find.text('305'));
+    await shot('manager_room_sheet');
     await back();
-    await tap(find.text('Réservations'));
-    await shot('placeholder');
+    await tap(find.text('Ajouter des chambres'));
+    await shot('manager_add_rooms');
+    await back();
+    await back();
+    await tap(find.text('Tâches'));
+    await shot('manager_category_tasks');
+    await back();
     await back();
     await signOut();
     await database.close();
+    await deleteDatabase(path);
   });
 }
