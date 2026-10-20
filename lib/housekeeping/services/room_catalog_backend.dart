@@ -1,21 +1,77 @@
 import '../models/room.dart';
 
-enum RoomCatalogAction { create, update, archive, restore }
+enum RoomCatalogAction {
+  create,
+  createRange,
+  update,
+  archive,
+  restore,
+  renameFloor,
+  setCategoryTasks,
+}
+
+/// A category's default task list, applied to its new and idle rooms.
+class CategoryTasks {
+  final String category;
+  final List<String> labels;
+  final int version;
+  const CategoryTasks(this.category, this.labels, this.version);
+}
 
 class RoomCatalogSnapshot {
   final List<Room> rooms, archivedRooms;
-  const RoomCatalogSnapshot(this.rooms, this.archivedRooms);
-  factory RoomCatalogSnapshot.fromMap(Map<String, dynamic> map) =>
-      RoomCatalogSnapshot(
-        (map['rooms'] as List)
+
+  /// Floor names by floor number; floors without a name use "Étage N".
+  final Map<int, String> floorNames;
+  final Map<int, int> floorVersions;
+  final Map<String, CategoryTasks> categoryTasks;
+  const RoomCatalogSnapshot(
+    this.rooms,
+    this.archivedRooms, {
+    this.floorNames = const {},
+    this.floorVersions = const {},
+    this.categoryTasks = const {},
+  });
+
+  String floorName(int floor) => floorNames[floor] ?? 'Étage $floor';
+
+  /// Floors that have active rooms or a name, in order.
+  List<int> get floors =>
+      {...rooms.map((r) => r.floor), ...floorNames.keys}.toList()..sort();
+
+  /// Categories in use or with a task list, sorted.
+  List<String> get categories => {
+    ...rooms.map((r) => r.category),
+    ...archivedRooms.map((r) => r.category),
+    ...categoryTasks.keys,
+  }.toList()..sort();
+
+  factory RoomCatalogSnapshot.fromMap(Map<String, dynamic> map) {
+    List<Room> parse(List? source) =>
+        (source ?? [])
             .map((r) => Room.fromMap(Map<String, dynamic>.from(r as Map)))
             .toList()
-          ..sort((a, b) => a.number.compareTo(b.number)),
-        (map['archivedRooms'] as List? ?? [])
-            .map((r) => Room.fromMap(Map<String, dynamic>.from(r as Map)))
-            .toList()
-          ..sort((a, b) => a.number.compareTo(b.number)),
-      );
+          ..sort((a, b) => a.number.compareTo(b.number));
+    final floors = (map['floors'] as List? ?? []).cast<Map>();
+    return RoomCatalogSnapshot(
+      parse(map['rooms'] as List),
+      parse(map['archivedRooms'] as List?),
+      floorNames: {
+        for (final f in floors) f['number'] as int: f['name'] as String,
+      },
+      floorVersions: {
+        for (final f in floors) f['number'] as int: f['version'] as int,
+      },
+      categoryTasks: {
+        for (final e in (map['categoryTasks'] as Map? ?? {}).entries)
+          e.key as String: CategoryTasks(
+            e.key as String,
+            (e.value['tasks'] as List).cast<String>(),
+            e.value['version'] as int,
+          ),
+      },
+    );
+  }
 }
 
 abstract class RoomCatalogBackend {

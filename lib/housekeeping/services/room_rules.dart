@@ -11,6 +11,7 @@ void resetCleaning(Map<String, dynamic> room) {
   room['employeeId'] = null;
   room['approvedBy'] = null;
   room['urgent'] = false;
+  room['feedback'] = null;
   room['checklist'] = List.filled((room['tasks'] as List).length, false);
   for (final task in room['tasks'] as List) {
     task['photoId'] = null;
@@ -43,3 +44,22 @@ Map<String, dynamic>? activeRoom(Map<String, dynamic> state, String number) =>
         .cast<Map<String, dynamic>>()
         .where((r) => r['number'] == number)
         .firstOrNull;
+
+/// A room the cleaning workflow applies to: dirty, or occupied with a
+/// requested recouche (daily cleaning while the guest stays).
+bool cleanable(Map<String, dynamic> room) =>
+    room['status'] == 'dirty' ||
+    (room['status'] == 'occupied' && room['stayover'] == true);
+
+/// The room's current cleaning in the log (not yet approved), if any.
+Map<String, dynamic>? openCleaning(Map<String, dynamic> state, String number) =>
+    (state['cleanings'] as List? ?? [])
+        .cast<Map<String, dynamic>>()
+        .where((c) => c['room_number'] == number && c['approved_at'] == null)
+        .lastOrNull;
+
+/// Forgets an unfinished cleaning when the room's situation changes.
+void dropOpenCleaning(Map<String, dynamic> state, String number) =>
+    (state['cleanings'] as List? ?? []).removeWhere(
+      (c) => c['room_number'] == number && c['approved_at'] == null,
+    );

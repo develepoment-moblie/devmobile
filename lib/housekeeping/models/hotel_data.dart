@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart';
 
 import '../services/app_exception.dart';
 import '../services/housekeeping_backend.dart';
+import '../services/sqlite_housekeeping.dart';
+import 'cleaning_stats.dart';
+import 'lost_item.dart';
 import 'room.dart';
 import 'supply.dart';
 
@@ -39,6 +42,10 @@ class HotelData extends ChangeNotifier {
   final List<Room> rooms = [];
   final List<Supply> supplies = [];
   final List<HotelNotification> notifications = [];
+  final List<CleaningRecord> cleanings = [];
+  final List<LostItem> lostItems = [];
+  final Map<int, String> floorNames = {};
+  String floorName(int floor) => floorNames[floor] ?? 'Étage $floor';
 
   String? connectionError;
   bool _requestActive = false;
@@ -126,6 +133,8 @@ class HotelData extends ChangeNotifier {
       room.employeeId = r['employeeId'] as String?;
       room.employee = staffIds[room.employeeId];
       room.approvedBy = r['approvedBy'] as String?;
+      room.feedback = r['feedback'] as String?;
+      room.stayover = r['stayover'] == true;
       room.note = r['note'] as String;
       room.urgent = r['urgent'] as bool;
       room.version = r['version'] as int;
@@ -158,6 +167,9 @@ class HotelData extends ChangeNotifier {
             s['minimum'] as int,
           );
       supply.id = s['id'] as String;
+      supply.name = s['name'] as String;
+      supply.unit = s['unit'] as String;
+      supply.minimum = s['minimum'] as int;
       supply.quantity = s['quantity'] as int;
       supply.version = s['version'] as int;
       orderedSupplies.add(supply);
@@ -179,6 +191,24 @@ class HotelData extends ChangeNotifier {
                 ..read = n['read'] as bool,
         ),
       );
+    cleanings
+      ..clear()
+      ..addAll([
+        for (final c in json['cleanings'] as List? ?? [])
+          CleaningRecord.fromMap(c as Map),
+      ]);
+    lostItems
+      ..clear()
+      ..addAll([
+        for (final item in json['lostItems'] as List? ?? [])
+          LostItem.fromMap(item as Map),
+      ]);
+    floorNames
+      ..clear()
+      ..addAll({
+        for (final f in json['floors'] as List? ?? [])
+          f['number'] as int: f['name'] as String,
+      });
   }
 
   Future<void> _remote(String path, Map<String, dynamic> body) async {
@@ -332,4 +362,80 @@ class HotelData extends ChangeNotifier {
         'description': description,
         'urgent': urgent,
       });
+
+  // --------------------------------------------------------- stock items
+  Future<void> createSupply({
+    required String name,
+    required String unit,
+    required int quantity,
+    required int minimum,
+  }) => _remote('/v1/supplies/new/create', {
+    'name': name,
+    'unit': unit,
+    'quantity': quantity,
+    'minimum': minimum,
+  });
+
+  Future<void> updateSupply(
+    Supply supply, {
+    required String name,
+    required String unit,
+    required int minimum,
+    int? version,
+  }) => _remote('/v1/supplies/${supply.id}/update', {
+    'version': version ?? supply.version,
+    'name': name,
+    'unit': unit,
+    'minimum': minimum,
+  });
+
+  Future<void> deleteSupply(Supply supply) =>
+      _remote('/v1/supplies/${supply.id}/delete', {'version': supply.version});
+
+  // ------------------------------------------------- refusal and recouche
+  Future<void> refuse(Room room, String comment) => _remote(
+    '/v1/rooms/${room.number}/refuse',
+    {'version': room.version, 'comment': comment},
+  );
+
+  /// Occupied rooms where the supervisor can request or cancel a recouche.
+  bool canRequestStayover(Room room) =>
+      isSupervisor && room.status == RoomStatus.occupied;
+
+  Future<void> setStayover(Room room, bool value, {String note = ''}) =>
+      _remote('/v1/rooms/${room.number}/stayover', {
+        'version': room.version,
+        'value': value,
+        'note': note,
+      });
+
+  // ------------------------------------------------------ lost and found
+  bool canRecordLostItem(Room room) => isSupervisor || canClean(room);
+
+  Future<void> recordLostItem(
+    Room room,
+    String description, {
+    Uint8List? photo,
+  }) => _remote('/v1/lost/new/create', {
+    'roomNumber': room.number,
+    'description': description,
+    if (photo != null) 'photo': base64Encode(photo),
+  });
+
+  Future<void> returnLostItem(LostItem item, String returnedTo) => _remote(
+    '/v1/lost/${item.id}/return',
+    {'version': item.version, 'returnedTo': returnedTo},
+  );
+
+  Future<Uint8List> lostItemPhoto(LostItem item) async {
+    final backend = api;
+    if (backend is SqliteHousekeeping) {
+      return base64Decode(await backend.lostItemPhoto(item.id));
+    }
+    throw const HousekeepingException('Photos indisponibles.');
+  }
+
+  // ----------------------------------------------------------- statistics
+  CleaningStats statsSince(DateTime since) =>
+      CleaningStats.compute(cleanings, staffIds, since: since);
 }

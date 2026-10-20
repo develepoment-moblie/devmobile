@@ -115,8 +115,12 @@ void main() {
       'housekeeping_supplies',
       'housekeeping_notifications',
       'housekeeping_notification_reads',
+      'housekeeping_cleanings',
+      'housekeeping_lost_items',
+      'housekeeping_category_tasks',
+      'housekeeping_floors',
     });
-    expect(await session.database.versionOf('housekeeping'), 1);
+    expect(await session.database.versionOf('housekeeping'), 2);
     login('amina');
     final state = await backend.snapshot();
     expect((state['rooms'] as List), hasLength(16));
@@ -174,6 +178,40 @@ void main() {
         'category': 'Chambre Deluxe',
       });
       expect((await catalog.snapshot()).rooms.single.number, '101');
+    },
+  );
+
+  test(
+    'a version 1 database (phones already installed) upgrades in place',
+    () async {
+      login('amina');
+      await action(
+        'assign',
+        number: '305',
+        extra: {'employeeId': 'sarah', 'note': 'Avant midi', 'urgent': true},
+      );
+      final db = session.database.database;
+      for (final table in [
+        'housekeeping_cleanings',
+        'housekeeping_lost_items',
+        'housekeeping_category_tasks',
+        'housekeeping_floors',
+      ]) {
+        await db.execute('DROP TABLE $table');
+      }
+      await db.execute('ALTER TABLE housekeeping_rooms DROP COLUMN feedback');
+      await db.execute('ALTER TABLE housekeeping_rooms DROP COLUMN stayover');
+      await db.update('module_versions', {
+        'version': 1,
+      }, where: "module = 'housekeeping'");
+      await reopen();
+      expect(await session.database.versionOf('housekeeping'), 2);
+      final kept = await room('305');
+      expect((kept['employeeId'], kept['note']), ('sarah', 'Avant midi'));
+      expect((kept['stayover'], kept['feedback']), (false, null));
+      login('sarah');
+      await action('start', number: '305');
+      expect((await room('305'))['cleaning'], 'inProgress');
     },
   );
 

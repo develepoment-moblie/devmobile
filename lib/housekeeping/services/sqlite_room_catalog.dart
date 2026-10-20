@@ -1,7 +1,8 @@
-import 'local_session_store.dart';
 import '../models/task_schema.dart';
+import 'local_session_store.dart';
 import 'room_catalog_backend.dart';
 
+// The Manager's catalog: rooms, floors and the task list of each category.
 class SqliteRoomCatalog implements RoomCatalogBackend {
   final LocalSessionStore store;
   SqliteRoomCatalog(this.store);
@@ -18,7 +19,42 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
     return RoomCatalogSnapshot.fromMap({
       'rooms': s['rooms'],
       'archivedRooms': s['roomArchives'] ?? [],
+      'floors': s['floors'] ?? [],
+      'categoryTasks': s['categoryTasks'] ?? {},
     });
+  }
+
+  /// Fresh tasks for a room of [category]: its template, else the defaults.
+  static List<Map<String, dynamic>> tasksFor(
+    Map<String, dynamic> state,
+    String category,
+  ) {
+    final template = (state['categoryTasks'] as Map? ?? {})[category];
+    if (template == null) return TaskSchema.defaults();
+    final labels = (template['tasks'] as List).cast<String>();
+    return [
+      for (var i = 0; i < labels.length; i++)
+        {'id': 'task-$i', 'label': labels[i], 'photoId': null},
+    ];
+  }
+
+  // Not being cleaned now: the task list can be replaced safely.
+  static bool _idle(Map<String, dynamic> room) =>
+      (room['tasks'] as List? ?? []).every((t) => t['photoId'] == null) &&
+      ((room['status'] == 'dirty' &&
+              room['cleaning'] == 'waiting' &&
+              room['employeeId'] == null) ||
+          room['cleaning'] == 'completed');
+
+  static void _setTasks(
+    Map<String, dynamic> room,
+    List<Map<String, dynamic>> tasks,
+  ) {
+    room['tasks'] = tasks;
+    room['checklist'] = List.filled(
+      tasks.length,
+      room['cleaning'] == 'completed',
+    );
   }
 
   @override
@@ -27,37 +63,131 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
     Map<String, dynamic> body,
   ) => store.change((s) {
     _manager(s);
-    final number = body['number'];
-    final category = (body['category'] as String?)?.trim();
-    if (number is! String || !RegExp(r'^[1-9][0-9]{2}$').hasMatch(number)) {
-      store.fail('Numéro de 100 à 999 requis.');
-    }
-    if ((action == RoomCatalogAction.create ||
-            action == RoomCatalogAction.update) &&
-        (category == null || category.isEmpty || category.length > 80)) {
-      store.fail('Catégorie requise, 80 caractères maximum.');
-    }
+    final actor = store.actor(s)['full_name'];
     final rooms = s['rooms'] as List;
     final archives = s.putIfAbsent('roomArchives', () => <dynamic>[]) as List;
-    final actor = store.actor(s)['full_name'];
-    if (action == RoomCatalogAction.create) {
-      if ([...rooms, ...archives].any((r) => r['number'] == number)) {
-        store.fail('Ce numéro existe déjà, y compris dans les archives.', 409);
+    String category([Object? value]) {
+      final text = ((value ?? body['category']) as String?)?.trim();
+      if (text == null || text.isEmpty || text.length > 80) {
+        store.fail('Catégorie requise, 80 caractères maximum.');
       }
-      rooms.add({
+      return text;
+    }
+
+    bool taken(String number) =>
+        [...rooms, ...archives].any((r) => r['number'] == number);
+    Map<String, dynamic> newRoom(String number, String cat) {
+      final tasks = tasksFor(s, cat);
+      return {
         'number': number,
-        'category': category,
+        'category': cat,
         'status': 'dirty',
         'cleaning': 'waiting',
         'employeeId': null,
         'approvedBy': null,
         'note': '',
         'urgent': false,
-        'checklist': List.filled(4, false),
-        'tasks': TaskSchema.defaults(),
+        'stayover': false,
+        'feedback': null,
+        'checklist': List.filled(tasks.length, false),
+        'tasks': tasks,
         'version': 1,
         'history': ['Chambre créée par $actor'],
-      });
+      };
+    }
+
+    switch (action) {
+      case RoomCatalogAction.createRange:
+        final floor = body['floor'], from = body['from'], to = body['to'];
+        if (floor is! int || floor < 1 || floor > 9) {
+          store.fail('Étage de 1 à 9 requis.');
+        }
+        if (from is! int || to is! int || from < 0 || to > 99 || from > to) {
+          store.fail('Plage invalide : de 00 à 99, début avant la fin.');
+        }
+        if (to - from + 1 > 50) store.fail('50 chambres maximum à la fois.');
+        final cat = category();
+        final numbers = [for (var i = from; i <= to; i++) '${floor * 100 + i}'];
+        final existing = numbers.where(taken).toList();
+        if (existing.isNotEmpty) {
+          store.fail(
+            'Numéros déjà utilisés (y compris archivés) : ${existing.take(6).join(', ')}${existing.length > 6 ? '…' : ''}.',
+            409,
+          );
+        }
+        for (final number in numbers) {
+          rooms.add(newRoom(number, cat));
+        }
+        return;
+      case RoomCatalogAction.renameFloor:
+        final floor = body['floor'];
+        final name = (body['name'] as String?)?.trim();
+        if (floor is! int || floor < 1 || floor > 9) {
+          store.fail('Étage de 1 à 9 requis.');
+        }
+        if (name == null || name.isEmpty || name.length > 60) {
+          store.fail('Nom d’étage de 1 à 60 caractères.');
+        }
+        final floors = s.putIfAbsent('floors', () => <dynamic>[]) as List;
+        final row = floors.where((f) => f['number'] == floor).firstOrNull;
+        if (row == null) {
+          floors.add({'number': floor, 'name': name, 'version': 1});
+        } else {
+          if (body['version'] != null && body['version'] != row['version']) {
+            store.fail('Cet étage a changé. Actualisez.', 409);
+          }
+          row['name'] = name;
+          row['version'] = (row['version'] as int) + 1;
+        }
+        return;
+      case RoomCatalogAction.setCategoryTasks:
+        final cat = category();
+        final labels = body['labels'];
+        if (labels is! List ||
+            labels.isEmpty ||
+            labels.length > 40 ||
+            labels.any(
+              (l) => l is! String || l.trim().isEmpty || l.trim().length > 120,
+            )) {
+          store.fail('De 1 à 40 tâches de 1 à 120 caractères.');
+        }
+        final clean = [for (final l in labels) (l as String).trim()];
+        if (clean.map((l) => l.toLowerCase()).toSet().length != clean.length) {
+          store.fail('Chaque tâche ne doit apparaître qu’une fois.');
+        }
+        final templates =
+            s.putIfAbsent('categoryTasks', () => <String, dynamic>{}) as Map;
+        final current = templates[cat];
+        if (current != null &&
+            body['version'] != null &&
+            body['version'] != current['version']) {
+          store.fail('Ce modèle a changé. Actualisez.', 409);
+        }
+        templates[cat] = {
+          'tasks': clean,
+          'version': ((current?['version'] as int?) ?? 0) + 1,
+        };
+        // Rooms of the category not being cleaned get the new list now.
+        for (final room in [...rooms, ...archives]) {
+          if (room['category'] == cat && _idle(room)) {
+            _setTasks(room, tasksFor(s, cat));
+            room['version'] = (room['version'] as int) + 1;
+          }
+        }
+        return;
+      default:
+        break;
+    }
+
+    final number = body['number'];
+    if (number is! String || !RegExp(r'^[1-9][0-9]{2}$').hasMatch(number)) {
+      store.fail('Numéro de 100 à 999 requis.');
+    }
+    if (action == RoomCatalogAction.create) {
+      if (taken(number)) {
+        store.fail('Ce numéro existe déjà, y compris dans les archives.', 409);
+      }
+      rooms.add(newRoom(number, category()));
       return;
     }
     final source = action == RoomCatalogAction.restore ? archives : rooms;
@@ -95,6 +225,8 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
         'employeeId': null,
         'approvedBy': null,
         'urgent': false,
+        'stayover': false,
+        'feedback': null,
         'note': '',
         'checklist': List.filled((row['tasks'] as List).length, false),
       });
@@ -102,7 +234,10 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
         task['photoId'] = null;
       }
     } else {
-      row['category'] = category;
+      final cat = category();
+      final changed = row['category'] != cat;
+      row['category'] = cat;
+      if (changed && _idle(row)) _setTasks(row, tasksFor(s, cat));
     }
     row['version'] = (row['version'] as int) + 1;
     (row['history'] as List).add(

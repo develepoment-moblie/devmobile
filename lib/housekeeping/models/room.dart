@@ -18,6 +18,12 @@ class Room {
   String? employee;
   String? employeeId;
   String? approvedBy;
+
+  /// The supervisor's comment when a cleaning was refused.
+  String? feedback;
+
+  /// Occupied room with a requested daily cleaning (recouche).
+  bool stayover = false;
   int version = 1;
   String note;
   bool urgent;
@@ -65,6 +71,8 @@ class Room {
     room.version = map['version'] as int;
     room.employeeId = map['employeeId'] as String?;
     room.approvedBy = map['approvedBy'] as String?;
+    room.feedback = map['feedback'] as String?;
+    room.stayover = map['stayover'] == true;
     room.checklist
       ..clear()
       ..addAll((map['checklist'] as List).cast<bool>());
@@ -90,7 +98,8 @@ class Room {
       );
   }
 
-  bool get needsCleaning => status == RoomStatus.dirty;
+  bool get needsCleaning =>
+      status == RoomStatus.dirty || (status == RoomStatus.occupied && stayover);
   String get statusLabel => switch (status) {
     RoomStatus.ready => 'Libre',
     RoomStatus.occupied => 'Occupée',

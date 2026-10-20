@@ -16,7 +16,7 @@ import 'local_session_store.dart';
 // step to [migrate] for every change; never edit a step already pushed.
 final housekeepingSchema = ModuleSchema(
   module: 'housekeeping',
-  version: 1,
+  version: 2,
   migrate: (tx, from, to) async {
     if (from < 1) {
       await tx.execute('''CREATE TABLE housekeeping_rooms (
@@ -46,6 +46,36 @@ final housekeepingSchema = ModuleSchema(
         notification TEXT NOT NULL
           REFERENCES housekeeping_notifications(id) ON DELETE CASCADE,
         PRIMARY KEY(actor, notification))''');
+    }
+    if (from < 2) {
+      // Supervisor comment on a refused cleaning; cleaning an occupied room.
+      await tx.execute(
+        'ALTER TABLE housekeeping_rooms ADD COLUMN feedback TEXT',
+      );
+      await tx.execute(
+        'ALTER TABLE housekeeping_rooms ADD COLUMN stayover INTEGER NOT NULL DEFAULT 0',
+      );
+      // One row per cleaning, for the supervisor's statistics.
+      await tx.execute('''CREATE TABLE housekeeping_cleanings (
+        id TEXT PRIMARY KEY, room_number TEXT NOT NULL, agent_id TEXT,
+        kind TEXT NOT NULL CHECK(kind IN ('checkout','stayover')),
+        assigned_at TEXT NOT NULL, started_at TEXT, submitted_at TEXT,
+        approved_at TEXT, refusals INTEGER NOT NULL DEFAULT 0)''');
+      await tx.execute('''CREATE TABLE housekeeping_lost_items (
+        id TEXT PRIMARY KEY, room_number TEXT NOT NULL,
+        description TEXT NOT NULL, photo_id TEXT, found_by TEXT NOT NULL,
+        found_by_name TEXT NOT NULL, found_at TEXT NOT NULL,
+        returned_at TEXT, returned_to TEXT, version INTEGER NOT NULL)''');
+      // Default task list of each room category (JSON list of labels).
+      await tx.execute('''CREATE TABLE housekeeping_category_tasks (
+        category TEXT PRIMARY KEY, tasks TEXT NOT NULL,
+        version INTEGER NOT NULL)''');
+      await tx.execute('''CREATE TABLE housekeeping_floors (
+        number INTEGER PRIMARY KEY CHECK(number BETWEEN 1 AND 9),
+        name TEXT NOT NULL, version INTEGER NOT NULL)''');
+    }
+    // A new install gets its starting data once every table exists.
+    if (from < 1) {
       await HousekeepingStore._write(tx, housekeepingSeedState());
     }
   },
@@ -69,6 +99,10 @@ Map<String, dynamic> housekeepingSeedState({
       'supplies': <dynamic>[],
       'notifications': <dynamic>[],
       'reads': <String, dynamic>{},
+      'cleanings': <dynamic>[],
+      'lostItems': <dynamic>[],
+      'categoryTasks': <String, dynamic>{},
+      'floors': <dynamic>[],
     };
   }
   final seed = jsonDecode(housekeepingSeedJson) as Map<String, dynamic>;
@@ -86,6 +120,13 @@ Map<String, dynamic> housekeepingSeedState({
     'supplies': seed['supplies'],
     'notifications': seed['notifications'],
     'reads': <String, dynamic>{},
+    'cleanings': <dynamic>[],
+    'lostItems': <dynamic>[],
+    'categoryTasks': <String, dynamic>{},
+    'floors': <dynamic>[
+      for (var floor = 1; floor <= 4; floor++)
+        {'number': floor, 'name': 'Étage $floor', 'version': 1},
+    ],
   };
 }
 
@@ -195,6 +236,8 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
           'history': jsonDecode(row['history'] as String),
           'version': row['version'],
           'archived': row['archived'] == 1,
+          'feedback': row['feedback'],
+          'stayover': row['stayover'] == 1,
         },
     ];
     final reads = <String, dynamic>{};
@@ -232,6 +275,34 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
           },
       ],
       'reads': reads,
+      'cleanings': [
+        for (final row in await db.query(
+          'housekeeping_cleanings',
+          orderBy: 'assigned_at',
+        ))
+          Map<String, dynamic>.from(row),
+      ],
+      'lostItems': [
+        for (final row in await db.query(
+          'housekeeping_lost_items',
+          orderBy: 'found_at DESC',
+        ))
+          Map<String, dynamic>.from(row),
+      ],
+      'categoryTasks': {
+        for (final row in await db.query('housekeeping_category_tasks'))
+          row['category'] as String: {
+            'tasks': jsonDecode(row['tasks'] as String),
+            'version': row['version'],
+          },
+      },
+      'floors': [
+        for (final row in await db.query(
+          'housekeeping_floors',
+          orderBy: 'number',
+        ))
+          Map<String, dynamic>.from(row),
+      ],
       // The shape the business rules expect for the staff list.
       'users': [
         for (final user in staff)
@@ -286,7 +357,56 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             'history': jsonEncode(r['history']),
             'version': r['version'],
             'archived': archived ? 1 : 0,
+            'feedback': r['feedback'],
+            'stayover': r['stayover'] == true ? 1 : 0,
           },
+    ]);
+    await sync('housekeeping_cleanings', 'id', [
+      for (final c in state['cleanings'] as List? ?? [])
+        {
+          for (final k in [
+            'id',
+            'room_number',
+            'agent_id',
+            'kind',
+            'assigned_at',
+            'started_at',
+            'submitted_at',
+            'approved_at',
+            'refusals',
+          ])
+            k: c[k],
+        },
+    ]);
+    await sync('housekeeping_lost_items', 'id', [
+      for (final item in state['lostItems'] as List? ?? [])
+        {
+          for (final k in [
+            'id',
+            'room_number',
+            'description',
+            'photo_id',
+            'found_by',
+            'found_by_name',
+            'found_at',
+            'returned_at',
+            'returned_to',
+            'version',
+          ])
+            k: item[k],
+        },
+    ]);
+    await sync('housekeeping_category_tasks', 'category', [
+      for (final entry in (state['categoryTasks'] as Map? ?? {}).entries)
+        {
+          'category': entry.key,
+          'tasks': jsonEncode(entry.value['tasks']),
+          'version': entry.value['version'],
+        },
+    ]);
+    await sync('housekeeping_floors', 'number', [
+      for (final f in state['floors'] as List? ?? [])
+        {'number': f['number'], 'name': f['name'], 'version': f['version']},
     ]);
     final supplies = state['supplies'] as List;
     await sync('housekeeping_supplies', 'id', [
@@ -332,6 +452,8 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
       ])
         for (final task in room['tasks'] as List? ?? [])
           if (task['photoId'] is String) task['photoId'] as String,
+      for (final item in state['lostItems'] as List? ?? [])
+        if (item['photo_id'] is String) item['photo_id'] as String,
     };
     for (final photo in await tx.query(
       'housekeeping_photos',

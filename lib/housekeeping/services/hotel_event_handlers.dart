@@ -19,6 +19,8 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
       if (room == null || room['status'] == 'occupied') return;
       room['status'] = 'occupied';
       resetCleaning(room);
+      room['stayover'] = false;
+      dropOpenCleaning(state, e.roomNumber);
       room['note'] = '';
       addHistory(room, 'Client installé : ${e.guestName} (Réservations)');
       bumpVersion(room);
@@ -33,6 +35,8 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
       } else {
         room['status'] = 'dirty';
         resetCleaning(room);
+        room['stayover'] = false;
+        dropOpenCleaning(state, e.roomNumber);
         room['note'] = 'Le client vient de quitter la chambre';
         addHistory(room, 'Départ du client · chambre à nettoyer');
         addNotification(
@@ -54,6 +58,7 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
       if (room['status'] != 'occupied') {
         room['status'] = 'maintenance';
         resetCleaning(room);
+        dropOpenCleaning(state, e.roomNumber);
         room['note'] = e.description;
       }
       addHistory(room, 'Problème signalé : ${e.description}');

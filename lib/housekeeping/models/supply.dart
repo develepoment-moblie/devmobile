@@ -1,7 +1,7 @@
 class Supply {
-  final String name;
-  final String unit;
-  final int minimum;
+  String name;
+  String unit;
+  int minimum;
   int quantity;
   String id = '';
   int version = 1;
