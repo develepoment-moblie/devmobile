@@ -33,6 +33,17 @@ Un seul `MaterialApp` (celui de `lib/app/`) : vos écrans sont des `Scaffold`.
 session.user            // AppUser : id, fullName, role (null si déconnecté)
 session.database        // AppDatabase : la base SQLite commune
 session.events          // AppEvents : messages entre modules
+session.staff           // StaffDirectory : le personnel, ex. users(roles: {AppRole.staff})
+```
+
+Pour écouter les événements dès le démarrage (même si personne n’a ouvert votre
+module), redéfinissez `attach` dans `<module>_module.dart` :
+
+```dart
+@override
+void attach(AppSession session) {
+  session.events.on<GuestCheckedOut>().listen((e) { /* ... */ });
+}
 ```
 
 ## Base de données : vos propres tables
@@ -119,3 +130,6 @@ git pull origin main
 rôle, sans mot de passe). Le responsable du module la remplace par la vraie
 connexion en gardant le même appel : `session.signIn(AppUser(...))`.
 Les rôles partagés sont dans `lib/shared/models/app_user.dart` (`AppRole`).
+La liste du personnel (`DemoStaffDirectory`, personnes fictives) est aussi
+temporaire : le module la remplace par les vrais comptes en gardant le contrat
+`StaffDirectory` (`lib/shared/services/staff_directory.dart`).

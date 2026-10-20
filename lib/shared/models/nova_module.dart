@@ -24,6 +24,10 @@ abstract class NovaModule {
   /// The module's own tables, or null while it has none.
   ModuleSchema? get schema => null;
 
+  /// Called once at startup, before anyone signs in. Subscribe to
+  /// session.events here, for example to react to another module's events.
+  void attach(AppSession session) {}
+
   /// The module's first screen, opened from the home screen.
   Widget buildHome(BuildContext context, AppSession session);
 }

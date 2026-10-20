@@ -4,6 +4,7 @@ import '../housekeeping/housekeeping_module.dart';
 import '../maintenance/maintenance_module.dart';
 import '../reservations/reservations_module.dart';
 import '../shared/models/nova_module.dart';
+import '../shared/services/app_session.dart';
 import '../user_management/user_management_module.dart';
 
 // All modules are already registered: you do not need to edit this file.
@@ -18,3 +19,10 @@ const List<NovaModule> novaModules = [
   BillingModule(),
   userManagement,
 ];
+
+/// Lets every module subscribe to events. Called once by main().
+void attachModules(AppSession session) {
+  for (final module in novaModules) {
+    module.attach(session);
+  }
+}

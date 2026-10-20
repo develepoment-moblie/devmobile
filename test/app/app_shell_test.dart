@@ -21,7 +21,11 @@ void main() {
       factory: databaseFactoryFfi,
       path: p.join(directory.path, 'nova.db'),
     );
-    session = AppSession(database: database);
+    session = AppSession(
+      database: database,
+      staff: userManagement.staffDirectory,
+    );
+    attachModules(session);
   });
   tearDown(() async {
     await session.database.close();
@@ -81,12 +85,11 @@ void main() {
 
     await tester.tap(find.text('Entrer (mode test)'));
     await tester.pump();
-    expect(find.text('Renseignez un nom.'), findsOneWidget);
+    expect(find.text('Choisissez une personne.'), findsOneWidget);
 
-    await tester.enterText(find.byType(TextFormField), 'Amina Test');
-    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.tap(find.byType(DropdownButtonFormField<AppUser>));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Gouvernante').last);
+    await tester.tap(find.text('Amina · Gouvernante').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Entrer (mode test)'));
     await tester.pumpAndSettle();
@@ -97,7 +100,7 @@ void main() {
     expect(find.text('Facturation et rapports'), findsNothing);
     expect(find.text('Utilisateurs'), findsNothing);
 
-    await tester.tap(find.text('Chambres et ménage'));
+    await tester.tap(find.text('Maintenance'));
     await tester.pumpAndSettle();
     expect(find.text('Module en construction'), findsOneWidget);
     await tester.tap(find.byType(BackButton));

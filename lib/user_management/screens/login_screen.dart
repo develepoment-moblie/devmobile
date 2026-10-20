@@ -4,9 +4,10 @@ import '../../shared/custom/app_theme.dart';
 import '../../shared/custom/nova_logo.dart';
 import '../../shared/models/app_user.dart';
 import '../../shared/services/app_session.dart';
+import '../services/demo_staff_directory.dart';
 
-// TEMPORARY test login: pick a name and a role, no password.
-// It lets every teammate open their module with the right role.
+// TEMPORARY test login: pick a fictional person, no password.
+// It lets every teammate open their module with the right role and identity.
 // The user_management owner replaces this screen with the real login
 // (accounts, hashed passwords), keeping the same call: session.signIn(user).
 class LoginScreen extends StatefulWidget {
@@ -18,20 +19,11 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final form = GlobalKey<FormState>();
-  final name = TextEditingController();
-  String role = AppRole.manager;
-
-  @override
-  void dispose() {
-    name.dispose();
-    super.dispose();
-  }
+  AppUser? person;
 
   void submit() {
     if (!form.currentState!.validate()) return;
-    widget.session.signIn(
-      AppUser(id: 'test-$role', fullName: name.text.trim(), role: role),
-    );
+    widget.session.signIn(person!);
   }
 
   @override
@@ -59,32 +51,25 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Connexion de test : choisissez un rôle pour ouvrir les modules correspondants.',
+                  'Connexion de test : choisissez une personne pour ouvrir les modules de son rôle.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: AppColors.muted),
                 ),
                 const SizedBox(height: 24),
-                TextFormField(
-                  controller: name,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(labelText: 'Nom'),
-                  validator: (v) => v == null || v.trim().isEmpty
-                      ? 'Renseignez un nom.'
-                      : null,
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  initialValue: role,
+                DropdownButtonFormField<AppUser>(
+                  initialValue: person,
                   isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Rôle'),
+                  decoration: const InputDecoration(labelText: 'Personne'),
                   items: [
-                    for (final entry in AppRole.labels.entries)
+                    for (final user in DemoStaffDirectory.people)
                       DropdownMenuItem(
-                        value: entry.key,
-                        child: Text(entry.value),
+                        value: user,
+                        child: Text('${user.fullName} · ${user.roleLabel}'),
                       ),
                   ],
-                  onChanged: (value) => setState(() => role = value!),
+                  onChanged: (value) => setState(() => person = value),
+                  validator: (value) =>
+                      value == null ? 'Choisissez une personne.' : null,
                 ),
                 const SizedBox(height: 24),
                 SizedBox(
