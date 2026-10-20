@@ -1,13 +1,19 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
+import '../../shared/custom/animations.dart';
 import '../../shared/custom/app_theme.dart';
-import '../custom/housekeeping_widgets.dart';
+import '../custom/add_rooms_sheet.dart';
+import '../custom/catalog_widgets.dart';
 import '../custom/draft_guard.dart';
+import '../custom/housekeeping_widgets.dart';
+import '../custom/roomcard.dart';
+import '../models/catalog_data.dart';
 import '../models/room.dart';
 import '../services/room_catalog_backend.dart';
+import 'category_tasks_screen.dart';
+import 'floor_screen.dart';
 
+// The Manager's catalog: the hotel's floors, each opening its rooms.
 class ManageRoomsScreen extends StatefulWidget {
   final RoomCatalogBackend backend;
   const ManageRoomsScreen({super.key, required this.backend});
@@ -16,328 +22,411 @@ class ManageRoomsScreen extends StatefulWidget {
 }
 
 class _ManageRoomsScreenState extends State<ManageRoomsScreen> {
+  late final catalog = CatalogData(widget.backend);
   final query = TextEditingController();
-  RoomCatalogSnapshot? data;
-  bool loading = false, saving = false, archived = false;
-  String? error;
-  Timer? timer;
+
   @override
   void initState() {
     super.initState();
-    load();
-    timer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (!saving) load();
-    });
+    catalog.addListener(_changed);
+    catalog.load();
   }
 
   @override
   void dispose() {
-    timer?.cancel();
+    catalog.removeListener(_changed);
+    catalog.dispose();
     query.dispose();
     super.dispose();
   }
 
-  Future<void> load() async {
-    if (loading) return;
-    setState(() => loading = true);
-    try {
-      final next = await widget.backend.snapshot();
-      if (mounted) {
-        setState(() {
-          data = next;
-          error = null;
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() => error = e.toString());
-    } finally {
-      if (mounted) setState(() => loading = false);
-    }
+  void _changed() {
+    if (mounted) setState(() {});
   }
 
-  Future<void> edit([Room? room]) async {
-    final saved = await showModalBottomSheet<bool>(
+  Future<void> addRooms() async {
+    final created = await showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       isDismissible: false,
       enableDrag: false,
-      builder: (_) => RoomFormSheet(backend: widget.backend, room: room),
+      builder: (_) => AddRoomsSheet(catalog: catalog),
     );
-    if (!mounted || saved != true) return;
-    showFeedback(
-      context,
-      room == null
-          ? 'Chambre créée · nettoyage requis.'
-          : 'Chambre mise à jour.',
-    );
-    await load();
+    if (mounted && created != null) {
+      showFeedback(
+        context,
+        created == 1
+            ? 'Chambre créée · nettoyage requis'
+            : '$created chambres créées · nettoyage requis',
+      );
+    }
   }
 
-  Future<void> change(Room room, RoomCatalogAction action) async {
-    if (saving) return;
-    final restore = action == RoomCatalogAction.restore;
-    if (!restore) {
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          scrollable: true,
-          title: Text('Archiver la chambre ${room.number} ?'),
-          content: const Text(
-            'Elle sera retirée du planning. Son historique sera conservé et vous pourrez la restaurer.',
-          ),
-          actions: [
-            TextButton(
-              autofocus: true,
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Annuler'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Archiver'),
-            ),
-          ],
-        ),
-      );
-      if (confirm != true || !mounted) return;
-    }
-    setState(() {
-      saving = true;
-      error = null;
-    });
-    try {
-      await widget.backend.mutate(action, {
-        'number': room.number,
-        'version': room.version,
-      });
-      if (mounted) {
-        showFeedback(
-          context,
-          restore
-              ? 'Chambre restaurée · nettoyage requis.'
-              : 'Chambre archivée.',
-        );
-      }
-    } catch (e) {
-      // Reconcile an uncertain response; never automatically repeat the action.
-      await load();
-      if (mounted) setState(() => error = e.toString());
-      return;
-    } finally {
-      if (mounted) setState(() => saving = false);
-    }
-    await load();
-  }
+  void open(Widget screen) =>
+      Navigator.push(context, MaterialPageRoute<void>(builder: (_) => screen));
 
   @override
   Widget build(BuildContext context) {
+    final snapshot = catalog.snapshot;
     final term = query.text.trim().toLowerCase();
-    final rooms = (archived ? data?.archivedRooms : data?.rooms) ?? <Room>[];
-    final visible = rooms
-        .where(
-          (r) =>
-              r.number.contains(term) ||
-              r.category.toLowerCase().contains(term),
-        )
-        .toList();
+    final found = term.isEmpty
+        ? const <Room>[]
+        : [
+            for (final r in catalog.rooms)
+              if (r.number.contains(term) ||
+                  r.category.toLowerCase().contains(term))
+                r,
+          ];
+    final counts = RoomCounts.of(catalog.rooms);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Gestion des chambres'),
+        title: const Text('Étages et chambres'),
         actions: [
           IconButton(
             tooltip: 'Actualiser',
-            onPressed: loading || saving ? null : load,
+            onPressed: catalog.loading ? null : catalog.load,
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: saving ? null : () => edit(),
+        onPressed: snapshot == null ? null : addRooms,
         icon: const Icon(Icons.add),
-        label: const Text('Créer une chambre'),
+        label: const Text('Ajouter des chambres'),
       ),
       body: RefreshIndicator(
-        onRefresh: load,
-        child: CustomScrollView(
+        onRefresh: catalog.load,
+        child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverToBoxAdapter(
-              child: Column(
-                children: [
-                  if (saving || (loading && data != null))
-                    const LinearProgressIndicator(),
-                  if (error != null)
-                    Padding(
-                      padding: const EdgeInsets.all(18),
-                      child: Semantics(
-                        liveRegion: true,
-                        child: Column(
-                          children: [
-                            Text(
-                              error!,
-                              style: const TextStyle(color: AppColors.red),
-                            ),
-                            TextButton(
-                              onPressed: loading ? null : load,
-                              child: const Text('Réessayer'),
-                            ),
-                          ],
+          padding: const EdgeInsets.fromLTRB(18, 4, 18, 110),
+          children: [
+            if (catalog.loading && snapshot != null)
+              const LinearProgressIndicator(),
+            if (catalog.error != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Column(
+                  children: [
+                    Text(
+                      catalog.error!,
+                      style: const TextStyle(color: AppColors.red),
+                    ),
+                    TextButton(
+                      onPressed: catalog.load,
+                      child: const Text('Réessayer'),
+                    ),
+                  ],
+                ),
+              ),
+            if (snapshot == null && catalog.error == null)
+              const Padding(
+                padding: EdgeInsets.all(36),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            if (snapshot != null) ...[
+              FadeSlideIn(
+                child: Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    gradient: AppGradients.hero,
+                    borderRadius: BorderRadius.circular(22),
+                    boxShadow: AppShadows.soft,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'L’HÔTEL',
+                        style: TextStyle(
+                          color: AppColors.gold.withValues(alpha: .95),
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.2,
                         ),
                       ),
+                      const SizedBox(height: 4),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          AnimatedCount(
+                            counts.total,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 32,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Text(
+                                'chambres sur ${snapshot.floors.length} étage${snapshot.floors.length > 1 ? 's' : ''}',
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      StatusBar(counts),
+                      const SizedBox(height: 10),
+                      _LightLegend(counts),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () =>
+                          open(CategoryTasksScreen(catalog: catalog)),
+                      icon: const Icon(Icons.checklist),
+                      label: const Text('Tâches'),
                     ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 10, 18, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        TextField(
-                          controller: query,
-                          onChanged: (_) => setState(() {}),
-                          decoration: InputDecoration(
-                            labelText: 'Numéro ou catégorie',
-                            prefixIcon: const Icon(Icons.search),
-                            suffixIcon: query.text.isEmpty
-                                ? null
-                                : IconButton(
-                                    tooltip: 'Effacer la recherche',
-                                    onPressed: () => setState(query.clear),
-                                    icon: const Icon(Icons.clear),
-                                  ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          children: [
-                            ChoiceChip(
-                              label: Text(
-                                'Actives · ${data?.rooms.length ?? 0}',
-                              ),
-                              selected: !archived,
-                              onSelected: (_) =>
-                                  setState(() => archived = false),
-                            ),
-                            ChoiceChip(
-                              label: Text(
-                                'Archivées · ${data?.archivedRooms.length ?? 0}',
-                              ),
-                              selected: archived,
-                              onSelected: (_) =>
-                                  setState(() => archived = true),
-                            ),
-                          ],
-                        ),
-                        Text(
-                          '${visible.length} résultat${visible.length == 1 ? '' : 's'}',
-                          style: const TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () =>
+                          open(ArchivedRoomsScreen(catalog: catalog)),
+                      icon: const Icon(Icons.inventory_2_outlined),
+                      label: Text(
+                        'Archives · ${snapshot.archivedRooms.length}',
+                      ),
                     ),
                   ),
                 ],
               ),
-            ),
-            if (loading && data == null)
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.all(36),
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              )
-            else if (data != null)
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(18, 4, 18, 110),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate((context, index) {
-                    if (visible.isEmpty) {
-                      return EmptyState(
-                        term.isNotEmpty
-                            ? 'Aucune chambre trouvée'
-                            : archived
-                            ? 'Aucune chambre archivée'
-                            : 'Aucune chambre',
-                        term.isNotEmpty
-                            ? 'Modifiez ou effacez la recherche.'
-                            : archived
-                            ? 'Les chambres retirées du planning apparaîtront ici.'
-                            : 'Créez la première chambre de l’hôtel.',
-                      );
-                    }
-                    final room = visible[index];
-                    return Card(
-                      color: Colors.white,
-                      elevation: 0,
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Text(
-                              'Chambre ${room.number}',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text('${room.category} · Étage ${room.floor}'),
-                            Text(
-                              archived ? 'Archivée' : room.statusLabel,
-                              style: const TextStyle(color: AppColors.muted),
-                            ),
-                            if (!archived && !room.canArchive)
-                              const Padding(
-                                padding: EdgeInsets.only(top: 6),
-                                child: Text(
-                                  'Archivage indisponible : chambre occupée, en maintenance ou avec un agent attribué.',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: AppColors.muted,
-                                  ),
-                                ),
-                              ),
-                            Wrap(
-                              spacing: 8,
-                              children: [
-                                if (!archived)
-                                  TextButton.icon(
-                                    onPressed: saving ? null : () => edit(room),
-                                    icon: const Icon(Icons.edit_outlined),
-                                    label: const Text('Modifier'),
-                                  ),
-                                TextButton.icon(
-                                  onPressed:
-                                      saving || (!archived && !room.canArchive)
-                                      ? null
-                                      : () => change(
-                                          room,
-                                          archived
-                                              ? RoomCatalogAction.restore
-                                              : RoomCatalogAction.archive,
-                                        ),
-                                  icon: Icon(
-                                    archived
-                                        ? Icons.unarchive_outlined
-                                        : Icons.archive_outlined,
-                                  ),
-                                  label: Text(
-                                    archived ? 'Restaurer' : 'Archiver',
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+              const SizedBox(height: 14),
+              TextField(
+                controller: query,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: 'Numéro ou catégorie',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: query.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Effacer la recherche',
+                          onPressed: () => setState(query.clear),
+                          icon: const Icon(Icons.clear),
                         ),
-                      ),
-                    );
-                  }, childCount: visible.isEmpty ? 1 : visible.length),
                 ),
               ),
+              const SizedBox(height: 16),
+              if (term.isNotEmpty) ...[
+                Text(
+                  '${found.length} résultat${found.length == 1 ? '' : 's'}',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+                const SizedBox(height: 8),
+                if (found.isEmpty)
+                  const EmptyState(
+                    'Aucune chambre trouvée',
+                    'Modifiez ou effacez la recherche.',
+                  ),
+                for (final (i, room) in found.indexed)
+                  FadeSlideIn(
+                    key: ValueKey('search-${room.number}'),
+                    index: i,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Roomcard(
+                        room: room,
+                        cleaning: false,
+                        onTap: () => showModalBottomSheet<void>(
+                          context: context,
+                          isScrollControlled: true,
+                          useSafeArea: true,
+                          builder: (_) =>
+                              RoomSheet(catalog: catalog, number: room.number),
+                        ),
+                      ),
+                    ),
+                  ),
+              ] else ...[
+                const Text(
+                  'Étages',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 10),
+                if (snapshot.floors.isEmpty)
+                  const EmptyState(
+                    'Aucun étage',
+                    'Ajoutez des chambres : leur étage apparaîtra ici.',
+                  ),
+                for (final (i, floor) in snapshot.floors.indexed)
+                  FadeSlideIn(
+                    index: i,
+                    child: _FloorCard(
+                      name: catalog.floorName(floor),
+                      counts: RoomCounts.of(catalog.roomsOn(floor)),
+                      onTap: () =>
+                          open(FloorScreen(catalog: catalog, floor: floor)),
+                    ),
+                  ),
+              ],
+            ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _LightLegend extends StatelessWidget {
+  final RoomCounts counts;
+  const _LightLegend(this.counts);
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 12,
+    runSpacing: 6,
+    children: [
+      for (final (label, count) in [
+        ('Libres', counts.ready),
+        ('À nettoyer', counts.toClean),
+        ('Occupées', counts.occupied),
+        ('Maintenance', counts.maintenance),
+      ])
+        Text(
+          '$label $count',
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+        ),
+    ],
+  );
+}
+
+class _FloorCard extends StatelessWidget {
+  final String name;
+  final RoomCounts counts;
+  final VoidCallback onTap;
+  const _FloorCard({
+    required this.name,
+    required this.counts,
+    required this.onTap,
+  });
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
+      ),
+      child: PressableScale(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${counts.total} chambre${counts.total == 1 ? '' : 's'}',
+                    style: const TextStyle(color: AppColors.muted),
+                  ),
+                  const SizedBox(width: 6),
+                  const Icon(Icons.chevron_right, color: AppColors.primary),
+                ],
+              ),
+              const SizedBox(height: 10),
+              StatusBar(counts, height: 8),
+              const SizedBox(height: 8),
+              StatusLegend(counts),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// Archived rooms, with restoration.
+class ArchivedRoomsScreen extends StatefulWidget {
+  final CatalogData catalog;
+  const ArchivedRoomsScreen({super.key, required this.catalog});
+  @override
+  State<ArchivedRoomsScreen> createState() => _ArchivedRoomsScreenState();
+}
+
+class _ArchivedRoomsScreenState extends State<ArchivedRoomsScreen> {
+  bool busy = false;
+  String? error;
+
+  Future<void> restore(Room room) async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await widget.catalog.change(RoomCatalogAction.restore, {
+        'number': room.number,
+        'version': room.version,
+      });
+      if (mounted) {
+        showFeedback(context, 'Chambre ${room.number} restaurée · à nettoyer');
+      }
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rooms = widget.catalog.snapshot?.archivedRooms ?? const <Room>[];
+    return Scaffold(
+      appBar: AppBar(title: const Text('Chambres archivées')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+        children: [
+          if (busy) const LinearProgressIndicator(),
+          if (error != null)
+            Text(error!, style: const TextStyle(color: AppColors.red)),
+          if (rooms.isEmpty)
+            const EmptyState(
+              'Aucune chambre archivée',
+              'Les chambres retirées du planning apparaîtront ici.',
+            ),
+          for (final (i, room) in rooms.indexed)
+            FadeSlideIn(
+              index: i,
+              child: Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  title: Text(
+                    'Chambre ${room.number}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: Text(
+                    '${room.category} · ${widget.catalog.floorName(room.floor)}',
+                  ),
+                  trailing: TextButton.icon(
+                    onPressed: busy ? null : () => restore(room),
+                    icon: const Icon(Icons.unarchive_outlined),
+                    label: const Text('Restaurer'),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

@@ -21,6 +21,7 @@ class MemoryStore implements LocalSessionStore, LocalAttachmentStore {
     {'id': 'sarah', 'full_name': 'Sarah', 'role': 'staff'},
     {'id': 'lina', 'full_name': 'Lina', 'role': 'staff'},
     {'id': 'youssef', 'full_name': 'Youssef', 'role': 'staff'},
+    {'id': 'manager', 'full_name': 'Manager', 'role': 'manager'},
   ];
 
   void signIn(String id) =>

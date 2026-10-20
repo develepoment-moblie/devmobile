@@ -4,6 +4,7 @@ import '../../shared/models/app_user.dart';
 import '../../shared/services/app_session.dart';
 import '../models/hotel_data.dart';
 import '../services/housekeeping_store.dart';
+import '../services/phone_alerts.dart';
 import '../services/sqlite_housekeeping.dart';
 import '../services/sqlite_room_catalog.dart';
 import 'housekeeping_workspace.dart';
@@ -41,6 +42,8 @@ class _CleaningWorkspaceState extends State<_CleaningWorkspace> {
   );
   bool loading = true;
   String? error;
+  // One instance for the app: the plugin is initialised once.
+  static final _alerts = LocalPhoneAlerts();
 
   @override
   void initState() {
@@ -94,6 +97,7 @@ class _CleaningWorkspaceState extends State<_CleaningWorkspace> {
     return HousekeepingWorkspace(
       data: data,
       agent: widget.session.user?.role == AppRole.staff,
+      alerts: _alerts,
     );
   }
 }

@@ -6,8 +6,11 @@ import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../custom/nova_icon.dart';
 import '../models/hotel_data.dart';
+import '../services/phone_alerts.dart';
 import 'agent_dashboard_screen.dart';
 import 'agent_rooms_screen.dart';
+import 'details_screen.dart';
+import 'qr_scan_screen.dart';
 import 'housekeeping_screen.dart';
 import 'notifications_screen.dart';
 import 'rooms_screen.dart';
@@ -21,10 +24,14 @@ import 'supplies_screen.dart';
 class HousekeepingWorkspace extends StatefulWidget {
   final HotelData data;
   final bool agent;
+
+  /// Phone notifications for new alerts; none in tests.
+  final PhoneAlerts? alerts;
   const HousekeepingWorkspace({
     super.key,
     required this.data,
     required this.agent,
+    this.alerts,
   });
   @override
   State<HousekeepingWorkspace> createState() => _HousekeepingWorkspaceState();
@@ -33,7 +40,13 @@ class HousekeepingWorkspace extends StatefulWidget {
 class _HousekeepingWorkspaceState extends State<HousekeepingWorkspace>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   HotelData get data => widget.data;
+  late final _watcher = widget.alerts == null
+      ? null
+      : AlertWatcher(widget.alerts!);
   Timer? timer;
+  void _watch() => _watcher?.check(
+    widget.agent ? data.personalNotifications : data.notifications,
+  );
   int destination = 0;
   final _history = <int>[];
   // Fades the newly selected tab in; the tabs themselves keep their state.
@@ -52,8 +65,10 @@ class _HousekeepingWorkspaceState extends State<HousekeepingWorkspace>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     data.onChanged = () {
+      _watch();
       if (mounted) setState(() {});
     };
+    _watch();
     // Picks up changes made by other modules' events.
     timer = Timer.periodic(const Duration(seconds: 5), (_) => _refresh());
   }
@@ -95,6 +110,33 @@ class _HousekeepingWorkspaceState extends State<HousekeepingWorkspace>
   }
 
   void openHousekeeping() => navigate(4);
+
+  // Scan a door code, then open the room if this person may see it.
+  Future<void> scan() async {
+    final number = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => const QrScanScreen()),
+    );
+    if (number == null || !mounted) return;
+    await _refresh();
+    if (!mounted) return;
+    final room = data.rooms.where((r) => r.number == number).firstOrNull;
+    if (room == null || !(data.isSupervisor || data.canClean(room))) {
+      showFeedback(
+        context,
+        room == null
+            ? 'Chambre $number inconnue ou archivée.'
+            : 'La chambre $number ne vous est pas attribuée.',
+      );
+      return;
+    }
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => DetailsScreen(data: data, room: room),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -158,6 +200,7 @@ class _HousekeepingWorkspaceState extends State<HousekeepingWorkspace>
               NovaHeader(
                 // Leaves the module at once; system Back still steps through tabs.
                 onBack: () => Navigator.of(context).pop(),
+                onScan: scan,
                 unread: agent
                     ? data.personalNotifications.any((n) => !n.read)
                     : data.unread > 0,

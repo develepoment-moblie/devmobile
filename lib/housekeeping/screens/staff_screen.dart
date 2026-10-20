@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../models/hotel_data.dart';
+import 'lost_items_screen.dart';
+import 'stats_screen.dart';
 
 class StaffScreen extends StatelessWidget {
   final HotelData data;
@@ -57,6 +59,26 @@ class StaffScreen extends StatelessWidget {
           '${data.supplies.where((s) => s.isLow).length} stock bas',
           Icons.inventory_2_outlined,
           () => navigate(3),
+        ),
+        (
+          'Objets trouvés',
+          '${data.lostItems.where((i) => !i.returned).length} à rendre',
+          Icons.search,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => LostItemsScreen(data: data),
+            ),
+          ),
+        ),
+        (
+          'Statistiques',
+          '${data.statsSince(DateTime.now().copyWith(hour: 0, minute: 0, second: 0, millisecond: 0, microsecond: 0)).approved} validés aujourd’hui',
+          Icons.insights_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(builder: (_) => StatsScreen(data: data)),
+          ),
         ),
       ].map(
         (item) => Card(

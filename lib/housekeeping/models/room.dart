@@ -102,7 +102,7 @@ class Room {
       status == RoomStatus.dirty || (status == RoomStatus.occupied && stayover);
   String get statusLabel => switch (status) {
     RoomStatus.ready => 'Libre',
-    RoomStatus.occupied => 'Occupée',
+    RoomStatus.occupied => stayover ? 'Occupée · recouche' : 'Occupée',
     RoomStatus.dirty => 'À nettoyer',
     RoomStatus.maintenance => 'Maintenance',
   };
