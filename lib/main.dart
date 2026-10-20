@@ -10,5 +10,10 @@ Future<void> main() async {
   final database = await AppDatabase.open(
     schemas: [for (final module in novaModules) ?module.schema],
   );
-  runApp(NovaApp(session: AppSession(database: database)));
+  final session = AppSession(
+    database: database,
+    staff: userManagement.staffDirectory,
+  );
+  attachModules(session);
+  runApp(NovaApp(session: session));
 }

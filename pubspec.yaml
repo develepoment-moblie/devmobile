@@ -16,6 +16,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   sqflite: ^2.4.4+2
   path: ^1.9.1
+  # housekeeping: task photos (camera/gallery, JPEG normalisation, photo ids)
+  image_picker: ^1.2.4
+  image: ^4.12.0
+  pointycastle: ^4.0.0
 
 dev_dependencies:
   flutter_test:
