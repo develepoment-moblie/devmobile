@@ -8,6 +8,7 @@ import 'housekeeping_backend.dart';
 import 'auto_assignment.dart';
 import 'cleaning_timer.dart';
 import 'housekeeping_store.dart';
+import 'inspection_scoring.dart';
 import 'local_attachment_store.dart';
 import 'local_session_store.dart';
 import 'mutation_meta.dart';
@@ -18,7 +19,9 @@ import 'room_rules.dart';
 //
 // Paths: /v1/rooms/<number>/<action>, /v1/supplies/<id|new>/<action>,
 // /v1/lost/<id|new>/<action>, /v1/availability/<agentId>/set,
-// /v1/plans/new/apply, /v1/notifications/read.
+// /v1/plans/new/apply, /v1/inspection-rules/<category>/set,
+// /v1/notifications/read. approve and refuse take optional inspection
+// ratings (see _inspect).
 // Every body carries mutationId (UUID v4) and clientTimestamp; a repeated
 // mutationId is ignored. Times are taken from [clock] inside the
 // transaction, never from the client.
@@ -87,8 +90,13 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
         now,
       );
     }
+    s['inspections'] = [
+      for (final i in s['inspections'] as List? ?? [])
+        if (supervisor || i['agent_id'] == actor['id']) i,
+    ];
     if (!supervisor) {
       s.remove('availability');
+      s.remove('inspectionRules');
     }
     for (final key in [
       'users',
@@ -329,6 +337,19 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       );
       item['returned_at'] = now.toIso8601String();
       bumpVersion(item);
+      return;
+    }
+
+    // -------------------------------------------------- inspection grading
+    if (family == 'inspection-rules') {
+      require(action == 'set', 'Action inconnue.');
+      require(supervisor, 'Barème réservé à la gouvernante.', 403);
+      final category = Uri.decodeComponent(key).trim();
+      require(
+        category.isNotEmpty && category.length <= 80,
+        'Catégorie invalide.',
+      );
+      setInspectionRules(s, category, body, store.fail);
       return;
     }
 
@@ -577,6 +598,15 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
               (row['tasks'] as List).every((t) => t['photoId'] != null),
           'Chaque tâche doit être terminée et justifiée par une photo.',
         );
+        if (body['ratings'] != null) {
+          final result = _inspect(s, row, body, actor, now, storePhoto);
+          require(
+            passes(result.score, result.threshold),
+            'Score insuffisant : ${result.score}/100 pour un seuil de ${result.threshold}. Renvoyez la chambre en nettoyage.',
+            409,
+          );
+          _recordInspection(s, row, result, actor, now, 'approved', null);
+        }
         final stayover = row['stayover'] == true;
         // A recouche keeps the guest's room occupied.
         row['status'] = stayover ? 'occupied' : 'ready';
@@ -591,13 +621,37 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       case 'refuse':
         require(supervisor, 'Refus réservé à la gouvernante.', 403);
         require(row['cleaning'] == 'review', 'Inspection non disponible.');
-        final comment = text(
-          body['comment'],
-          300,
-          'Expliquez ce qui est à reprendre (300 caractères maximum).',
-        );
+        final result = body['ratings'] == null
+            ? null
+            : _inspect(s, row, body, actor, now, storePhoto);
+        final failed = result?.failed ?? const <Map<String, dynamic>>[];
+        // A comment is required unless failed items explain the send-back.
+        final hasComment =
+            body['comment'] is String &&
+            (body['comment'] as String).trim().isNotEmpty;
+        final comment = failed.isNotEmpty && !hasComment
+            ? null
+            : text(
+                body['comment'],
+                300,
+                'Expliquez ce qui est à reprendre (300 caractères maximum).',
+              );
+        final labels = [for (final f in failed) f['label'] as String];
         row['cleaning'] = 'inProgress';
-        row['feedback'] = comment;
+        row['feedback'] =
+            comment ??
+            '${labels.length} point${labels.length > 1 ? 's' : ''} à reprendre : ${labels.join(', ')}';
+        // Back to the same agent, first in their queue: the failed items
+        // must be done again, with new photos.
+        row['urgent'] = true;
+        final tasks = row['tasks'] as List;
+        for (final f in failed) {
+          final index = tasks.indexWhere((t) => t['id'] == f['task_id']);
+          if (index < 0) continue;
+          tasks[index]['photoId'] = null;
+          (row['checklist'] as List)[index] = false;
+        }
+        _recordInspection(s, row, result, actor, now, 'sentBack', comment);
         final cycle = openCleaning(s, key);
         if (cycle != null) {
           cycle['refusals'] = (cycle['refusals'] as int) + 1;
@@ -609,7 +663,11 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
         addNotification(
           s,
           title: 'Nettoyage à reprendre',
-          message: 'Chambre $key : $comment',
+          message: [
+            'Chambre $key',
+            ?comment,
+            if (labels.isNotEmpty) 'À refaire : ${labels.join(', ')}',
+          ].join(' · '),
           roomNumber: key,
           audience: 'agent',
         );
@@ -734,6 +792,128 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     bumpVersion(row);
   }
 
+  // Checks the ratings (every task rated once) and computes the score.
+  ({
+    int score,
+    int threshold,
+    List<Map<String, dynamic>> items,
+    List<Map<String, dynamic>> failed,
+  })
+  _inspect(
+    Map<String, dynamic> s,
+    Map<String, dynamic> room,
+    Map<String, dynamic> body,
+    Map<String, dynamic> actor,
+    DateTime now,
+    String Function(Object?) storePhoto,
+  ) {
+    final ratings = body['ratings'];
+    if (ratings is! List) store.fail('Évaluation invalide.');
+    final tasks = (room['tasks'] as List).cast<Map<String, dynamic>>();
+    final rules = InspectionRules.fromMap(
+      (s['inspectionRules'] as Map? ?? {})[room['category']] as Map?,
+    );
+    final byTask = <String, Map>{};
+    for (final r in ratings) {
+      if (r is! Map || r['taskId'] is! String) {
+        store.fail('Évaluation invalide.');
+      }
+      if (byTask.containsKey(r['taskId'])) {
+        store.fail('Une tâche est évaluée deux fois.');
+      }
+      byTask[r['taskId'] as String] = r;
+    }
+    if (byTask.length != tasks.length ||
+        !tasks.every((t) => byTask.containsKey(t['id']))) {
+      store.fail('Évaluez chaque tâche de la liste de contrôle.');
+    }
+    final items = <Map<String, dynamic>>[];
+    for (final task in tasks) {
+      final r = byTask[task['id']]!;
+      final rating = InspectionRating.parse(r['rating']);
+      if (rating == null) store.fail('Note inconnue.');
+      final comment = r['comment'];
+      if (comment != null && (comment is! String || comment.length > 200)) {
+        store.fail('Commentaire de 200 caractères maximum.');
+      }
+      items.add({
+        'id': uuidV4(),
+        'task_id': task['id'],
+        'label': task['label'],
+        'weight': rules.weightOf(task['label'] as String),
+        'rating': rating.name,
+        'comment': switch ((comment as String?)?.trim()) {
+          '' || null => null,
+          final text => text,
+        },
+        'photo_id': r['photo'] == null ? null : storePhoto(r['photo']),
+      });
+    }
+    final score = inspectionScore([
+      for (final i in items)
+        (
+          weight: i['weight'] as int,
+          rating: InspectionRating.parse(i['rating'])!,
+        ),
+    ]);
+    return (
+      score: score,
+      threshold: rules.threshold,
+      items: items,
+      failed: [
+        for (final i in items)
+          if (i['rating'] != InspectionRating.ok.name) i,
+      ],
+    );
+  }
+
+  // Adds an inspection round to the room's history and the cleaning log.
+  void _recordInspection(
+    Map<String, dynamic> s,
+    Map<String, dynamic> room,
+    ({
+      int score,
+      int threshold,
+      List<Map<String, dynamic>> items,
+      List<Map<String, dynamic>> failed,
+    })?
+    result,
+    Map<String, dynamic> actor,
+    DateTime now,
+    String outcome,
+    String? comment,
+  ) {
+    final number = room['number'] as String;
+    final inspections = s['inspections'] as List? ?? (s['inspections'] = []);
+    // Rounds count from the last approval of the room.
+    var round = 1;
+    for (final i in inspections) {
+      if (i['room_number'] != number) continue;
+      round = i['outcome'] == 'approved' ? 1 : (i['round'] as int) + 1;
+    }
+    final cycle = openCleaning(s, number);
+    inspections.add({
+      'id': uuidV4(),
+      'cleaning_id': cycle?['id'],
+      'room_number': number,
+      'agent_id': room['employeeId'],
+      'inspector_id': actor['id'],
+      'inspector_name': actor['name'],
+      'round': round,
+      'score': result?.score,
+      'threshold': result?.threshold ?? defaultInspectionThreshold,
+      'outcome': outcome,
+      'comment': comment,
+      'inspected_at': now.toIso8601String(),
+      'items': result?.items ?? const [],
+    });
+    if (cycle != null) {
+      cycle['inspection_rounds'] =
+          ((cycle['inspection_rounds'] as int?) ?? 0) + 1;
+      if (result != null) cycle['inspection_score'] = result.score;
+    }
+  }
+
   bool _isAgent(Map<String, dynamic> s, Object? id) => (s['users'] as List).any(
     (u) => u['id'] == id && u['role'] == 'staff' && u['deleted'] != true,
   );
@@ -834,6 +1014,26 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       store.fail('Aucune photo pour cette tâche.', 404);
     }
     return _attachment(task['photoId'] as String);
+  }
+
+  /// Photo attached to an inspected item: for the supervisor or the agent.
+  Future<String> inspectionPhoto(String inspectionId, String itemId) async {
+    final s = await store.readState();
+    final actor = _principal(s);
+    final inspection = (s['inspections'] as List? ?? [])
+        .where((i) => i['id'] == inspectionId)
+        .firstOrNull;
+    final item = (inspection?['items'] as List? ?? [])
+        .where((i) => i['id'] == itemId)
+        .firstOrNull;
+    if (inspection == null || item == null || item['photo_id'] == null) {
+      store.fail('Aucune photo pour ce point.', 404);
+    }
+    if (actor['role'] != 'supervisor' &&
+        inspection['agent_id'] != actor['id']) {
+      store.fail('Inspection non accessible.', 403);
+    }
+    return _attachment(item['photo_id'] as String);
   }
 
   /// Photo of a found item: for the supervisor or the person who found it.

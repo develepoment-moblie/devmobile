@@ -9,6 +9,10 @@ class CleaningRecord {
 
   /// Timer duration (pauses excluded), when the timer was used.
   final int? durationMs;
+
+  /// Final inspection score (0-100) and number of inspection rounds.
+  final int? inspectionScore;
+  final int inspectionRounds;
   const CleaningRecord({
     required this.roomNumber,
     required this.agentId,
@@ -19,6 +23,8 @@ class CleaningRecord {
     this.submittedAt,
     this.approvedAt,
     this.durationMs,
+    this.inspectionScore,
+    this.inspectionRounds = 0,
   });
   static DateTime? _date(Object? v) => v == null ? null : DateTime.parse('$v');
   factory CleaningRecord.fromMap(Map m) => CleaningRecord(
@@ -31,6 +37,8 @@ class CleaningRecord {
     submittedAt: _date(m['submitted_at']),
     approvedAt: _date(m['approved_at']),
     durationMs: m['duration_ms'] as int?,
+    inspectionScore: m['inspection_score'] as int?,
+    inspectionRounds: (m['inspection_rounds'] as int?) ?? 0,
   );
 
   /// Actual cleaning time: the timer's when available (pauses excluded),
@@ -64,6 +72,9 @@ class CleaningStats {
   /// Approved cleanings that were never refused.
   final int firstTime;
   final Duration? averageTime;
+
+  /// Average final inspection score of the scored cleanings (0-100).
+  final int? averageScore;
   const CleaningStats({
     required this.agents,
     required this.approved,
@@ -71,6 +82,7 @@ class CleaningStats {
     required this.stayovers,
     required this.firstTime,
     required this.averageTime,
+    this.averageScore,
   });
 
   factory CleaningStats.compute(
@@ -109,6 +121,12 @@ class CleaningStats {
       stayovers: done.where((r) => r.stayover).length,
       firstTime: done.where((r) => r.refusals == 0).length,
       averageTime: average(done),
+      averageScore: () {
+        final scores = [for (final r in done) ?r.inspectionScore];
+        return scores.isEmpty
+            ? null
+            : (scores.reduce((a, b) => a + b) / scores.length).round();
+      }(),
     );
   }
 

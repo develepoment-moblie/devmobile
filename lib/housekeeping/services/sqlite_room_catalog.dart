@@ -2,6 +2,7 @@ import '../models/task_schema.dart';
 import 'local_session_store.dart';
 import 'mutation_meta.dart';
 import 'room_catalog_backend.dart';
+import 'room_rules.dart';
 
 // The Manager's catalog: rooms, floors and the task list of each category.
 // Every body carries mutationId (UUID v4) and clientTimestamp; a repeated
@@ -27,6 +28,7 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
       'floors': s['floors'] ?? [],
       'categoryTasks': s['categoryTasks'] ?? {},
       'estimates': s['estimates'] ?? {},
+      'inspectionRules': s['inspectionRules'] ?? {},
     });
   }
 
@@ -113,6 +115,9 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
     }
 
     switch (action) {
+      case RoomCatalogAction.setInspectionRules:
+        setInspectionRules(s, category(), body, store.fail);
+        return;
       case RoomCatalogAction.setCategoryEstimate:
         final cat = category();
         final minutes = body['minutes'];

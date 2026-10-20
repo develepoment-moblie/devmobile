@@ -10,6 +10,10 @@ Statut des chambres, attribution, validation, linge et produits.
 - [x] Attribution des tâches aux agents par la gouvernante
 - [x] Notification au départ du client (événement `GuestCheckedOut` des Réservations)
 - [x] Validation du nettoyage par la gouvernante, avec une photo par tâche
+- [x] Inspection notée : chaque point OK / partiel / non conforme (poids 1 à 5),
+      score sur 100 et seuil de réussite par catégorie ; « Renvoyer en nettoyage »
+      rend la chambre au même agent, en priorité, avec les points à refaire ;
+      historique des inspections par chambre, score dans le journal des nettoyages
 - [x] Linge et produits d’entretien (mouvements de stock)
 - [x] Catalogue des chambres pour le Manager (création, catégorie, archive, restauration)
 - [x] Signalement d’un problème à la Maintenance depuis la fiche chambre
@@ -55,9 +59,17 @@ services/
   sqlite_room_catalog.dart      règles du catalogue Manager
   hotel_event_handlers.dart     réactions aux événements des autres modules
   room_rules.dart               petites opérations communes sur une chambre
+  inspection_scoring.dart       notes, poids, score et seuil d’inspection (pur Dart)
   evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
 ```
 
-Tables : `housekeeping_rooms`, `housekeeping_photos`, `housekeeping_supplies`,
-`housekeeping_notifications`, `housekeeping_notification_reads` (version 1).
+Tables (version 4) : `housekeeping_rooms`, `housekeeping_photos`,
+`housekeeping_supplies`, `housekeeping_notifications`,
+`housekeeping_notification_reads`, `housekeeping_cleanings` (journal des
+nettoyages : durée, score d’inspection), `housekeeping_timer_segments`,
+`housekeeping_lost_items`, `housekeeping_category_tasks`,
+`housekeeping_category_estimates`, `housekeeping_floors`,
+`housekeeping_availability`, `housekeeping_mutations`,
+`housekeeping_inspections`, `housekeeping_inspection_items`,
+`housekeeping_inspection_rules`.
 Une nouvelle installation reçoit des chambres et un stock fictifs.

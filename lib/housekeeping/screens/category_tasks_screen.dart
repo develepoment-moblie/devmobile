@@ -4,8 +4,10 @@ import '../../shared/custom/animations.dart';
 import '../../shared/custom/app_theme.dart';
 import '../custom/draft_guard.dart';
 import '../custom/housekeeping_widgets.dart';
+import '../custom/inspection_rules_editor.dart';
 import '../models/catalog_data.dart';
 import '../models/task_schema.dart';
+import '../services/inspection_scoring.dart';
 import '../services/room_catalog_backend.dart';
 
 // The default task list of each room category.
@@ -197,7 +199,43 @@ class _CategoryTasksEditorState extends State<CategoryTasksEditor> {
     dirty: _dirty,
     busy: _busy,
     child: Scaffold(
-      appBar: AppBar(title: Text(widget.category)),
+      appBar: AppBar(
+        title: Text(widget.category),
+        actions: [
+          IconButton(
+            tooltip: 'Barème d’inspection',
+            onPressed: _busy
+                ? null
+                : () => Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => InspectionRulesEditor(
+                        category: widget.category,
+                        labels: [..._labels],
+                        rules:
+                            widget.catalog.snapshot?.rulesFor(
+                              widget.category,
+                            ) ??
+                            const InspectionRules(),
+                        save: (threshold, weights) => widget.catalog.change(
+                          RoomCatalogAction.setInspectionRules,
+                          {
+                            'category': widget.category,
+                            'threshold': threshold,
+                            'weights': weights,
+                            if (widget.catalog.snapshot?.inspectionRules[widget
+                                    .category]
+                                case final rules?)
+                              'version': rules.version,
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+            icon: const Icon(Icons.tune),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           if (_error != null)

@@ -1,7 +1,13 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:integration_test/integration_test.dart';
 import 'package:nova_paris/app/modules.dart';
 import 'package:nova_paris/app/nova_app.dart';
+import 'package:nova_paris/housekeeping/housekeeping_module.dart';
+import 'package:nova_paris/housekeeping/services/mutation_meta.dart';
+import 'package:nova_paris/housekeeping/services/sqlite_housekeeping.dart';
 import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_session.dart';
 import 'package:path/path.dart' as p;
@@ -29,6 +35,46 @@ void main() {
     );
     attachModules(session);
     await binding.convertFlutterSurfaceToImage();
+    // A cleaning awaiting inspection in the tour database: Amina assigns
+    // room 101 to Sarah, who does every task with a photo and submits.
+    final staff = await session.staff.users();
+    final rules = SqliteHousekeeping(housekeepingStoreFor(session));
+    final photo = base64Encode(
+      img.encodeJpg(img.Image(width: 16, height: 12), quality: 70),
+    );
+    Future<Map> room101() async =>
+        ((await rules.snapshot())['rooms'] as List).firstWhere(
+          (r) => r['number'] == '101',
+        ) as Map;
+    Future<void> as(
+      String id,
+      String action, [
+      Map<String, dynamic>? extra,
+    ]) async {
+      session.signIn(staff.firstWhere((u) => u.id == id));
+      await rules.mutate('/v1/rooms/101/$action', {
+        ...mutationMeta(),
+        'version': (await room101())['version'],
+        ...?extra,
+      });
+    }
+
+    await as('amina', 'assign', {
+      'employeeId': 'sarah',
+      'note': '',
+      'urgent': false,
+    });
+    await as('sarah', 'start');
+    for (var i = 0; i < ((await room101())['tasks'] as List).length; i++) {
+      await as('sarah', 'checklist', {
+        'index': i,
+        'value': true,
+        'photo': photo,
+      });
+    }
+    await as('sarah', 'submit');
+    session.signOut();
+
     await tester.pumpWidget(NovaApp(session: session));
 
     var step = 0;
@@ -77,6 +123,12 @@ void main() {
       await shot('supervisor_${tab.toLowerCase()}');
     }
     await tap(find.text('Chambres').last);
+    await tap(find.text('Chambre 101'));
+    await shot('room_101_review');
+    await tap(find.text('Inspecter le nettoyage'));
+    await shot('inspection');
+    await back();
+    await back();
     await tap(find.text('Chambre 112'));
     await shot('room_112_occupied');
     await back();

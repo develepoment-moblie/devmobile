@@ -84,6 +84,14 @@ class _StatsScreenState extends State<StatsScreen> {
                     Icons.bed_outlined,
                     AppColors.goldDeep,
                   ),
+                  if (stats.averageScore case final score?)
+                    (
+                      'Score moyen d’inspection',
+                      score,
+                      ' / 100',
+                      Icons.fact_check_outlined,
+                      AppColors.primaryLight,
+                    ),
                 ].indexed)
                   SizedBox(
                     width: (c.maxWidth - 10) / 2,

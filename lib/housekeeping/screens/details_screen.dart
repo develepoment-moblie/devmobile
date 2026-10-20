@@ -9,6 +9,8 @@ import '../custom/roomcard.dart';
 import '../models/hotel_data.dart';
 import '../models/room.dart';
 import 'assign_task_screen.dart';
+import 'inspection_history_screen.dart';
+import 'inspection_screen.dart';
 import 'task_photo_screen.dart';
 import '../custom/add_room_task_dialog.dart';
 import '../custom/cleaning_timer_card.dart';
@@ -121,18 +123,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
     if (mounted && saved == true) showFeedback(context, done);
   }
 
-  Future<void> refuse() => prompt(
-    TextPromptDialog(
-      title: 'Refuser le nettoyage',
-      label: 'À reprendre',
-      hint: 'Salle de bain : traces sur le miroir…',
-      message: 'L’agent reprend la chambre avec votre commentaire et la renvoie ensuite.',
-      action: 'Refuser',
-      destructive: true,
-      save: (comment) => widget.data.refuse(widget.room, comment),
-    ),
-    'Nettoyage renvoyé à l’agent',
-  );
+  Future<void> inspect() async {
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => InspectionScreen(data: widget.data, room: widget.room),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
 
   Future<void> requestStayover() => prompt(
     TextPromptDialog(
@@ -279,6 +278,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           ),
                           const SizedBox(height: 2),
                           Text(room.feedback!),
+                          if (data.sentBack(room) case final round?)
+                            for (final item in round.failed) ...[
+                              const SizedBox(height: 8),
+                              FailedItemRow(
+                                data: data,
+                                round: round,
+                                item: item,
+                              ),
+                            ],
                         ],
                       ),
                     ),
@@ -481,30 +489,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
                   'Le nettoyage attend la validation de la gouvernante.',
                 ),
                 const SizedBox(height: 12),
-                if (data.isSupervisor) ...[
+                if (data.isSupervisor)
                   NovaButton(
-                    'Valider le nettoyage',
+                    'Inspecter le nettoyage',
                     symbol: NovaSymbol.check,
-                    onPressed:
-                        !saving && data.isSupervisor && room.checklistComplete
-                        ? () => action(
-                            () => data.approve(room),
-                            room.stayover
-                                ? 'Recouche validée · chambre toujours occupée'
-                                : 'Nettoyage validé · chambre libre',
-                          )
+                    onPressed: !saving && room.checklistComplete
+                        ? inspect
                         : null,
                   ),
-                  const SizedBox(height: 10),
-                  OutlinedButton.icon(
-                    onPressed: saving ? null : refuse,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.red,
-                    ),
-                    icon: const Icon(Icons.replay_rounded),
-                    label: const Text('Refuser et faire reprendre'),
-                  ),
-                ],
                 if (!data.isSupervisor)
                   const Text(
                     'Validation réservée à la gouvernante.',
@@ -563,6 +555,24 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 onPressed: saving ? null : lostItem,
                 icon: const Icon(Icons.search, size: 18),
                 label: const Text('Objet trouvé'),
+              ),
+            ],
+            if (data.inspectionsOf(room.number).isNotEmpty) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => InspectionHistoryScreen(
+                      data: data,
+                      roomNumber: room.number,
+                    ),
+                  ),
+                ),
+                icon: const Icon(Icons.fact_check_outlined),
+                label: Text(
+                  'Inspections · ${data.inspectionsOf(room.number).length}',
+                ),
               ),
             ],
             const SizedBox(height: 28),

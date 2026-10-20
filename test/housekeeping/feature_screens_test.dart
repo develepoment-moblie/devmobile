@@ -113,7 +113,64 @@ void main() {
     data.dispose();
   });
 
-  testWidgets('the supervisor refuses a submitted cleaning with a comment', (
+  testWidgets(
+    'inspection: a failed item sends the room back; the agent sees why',
+    (tester) async {
+      final store = MemoryStore()..submitted('109', 'sarah');
+      final data = await loadAs(store, 'amina');
+      await show(
+        tester,
+        DetailsScreen(data: data, room: data.roomByNumber('109')),
+      );
+      await tapText(tester, 'Inspecter le nettoyage');
+      expect(find.text('Inspection · 109'), findsOneWidget);
+      expect(find.text('Conforme'), findsOneWidget);
+      // The bed linen is not compliant: 3 of 4 items OK = 75 < 80.
+      await tester.tap(find.text('Non conforme').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Insuffisant'), findsOneWidget);
+      final approve = find.widgetWithText(FilledButton, 'Valider le nettoyage');
+      await tester.scrollUntilVisible(
+        approve,
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(tester.widget<FilledButton>(approve).onPressed, isNull);
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Ce qui ne va pas'),
+        'Traces sur le miroir',
+      );
+      await tapText(tester, 'Renvoyer en nettoyage');
+      expect(
+        find.textContaining('À refaire : Changer le linge de lit'),
+        findsOneWidget,
+      );
+      await tapText(tester, 'Renvoyer');
+      expect(find.text('Chambre renvoyée en nettoyage'), findsOneWidget);
+      final room = store.room('109');
+      expect(
+        (room['cleaning'], room['employeeId'], room['urgent']),
+        ('inProgress', 'sarah', true),
+      );
+      expect((store.state['inspections'] as List).single['score'], 75);
+      data.dispose();
+
+      // Sarah reopens the room: what failed and why.
+      await tester.pumpWidget(const SizedBox());
+      final agent = await loadAs(store, 'sarah');
+      await show(
+        tester,
+        DetailsScreen(data: agent, room: agent.roomByNumber('109')),
+      );
+      expect(find.text('À reprendre'), findsOneWidget);
+      expect(find.text('Non conforme'), findsOneWidget);
+      expect(find.text('Traces sur le miroir'), findsOneWidget);
+      expect(find.text('Changer le linge de lit'), findsWidgets);
+      agent.dispose();
+    },
+  );
+
+  testWidgets('inspection: everything OK approves the cleaning', (
     tester,
   ) async {
     final store = MemoryStore()..submitted('109', 'sarah');
@@ -122,13 +179,12 @@ void main() {
       tester,
       DetailsScreen(data: data, room: data.roomByNumber('109')),
     );
-    await tapText(tester, 'Refuser et faire reprendre');
-    await tester.enterText(find.byType(TextFormField), 'Miroir à refaire');
-    await tapText(tester, 'Refuser');
-    expect(find.text('Nettoyage renvoyé à l’agent'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('À reprendre'), -200);
-    expect(find.text('Miroir à refaire'), findsOneWidget);
-    expect(store.room('109')['cleaning'], 'inProgress');
+    await tapText(tester, 'Inspecter le nettoyage');
+    await tapText(tester, 'Valider le nettoyage');
+    expect(find.text('Nettoyage validé · chambre libre'), findsOneWidget);
+    expect(store.room('109')['status'], 'ready');
+    final round = (store.state['inspections'] as List).single;
+    expect((round['score'], round['outcome']), (100, 'approved'));
     data.dispose();
   });
 

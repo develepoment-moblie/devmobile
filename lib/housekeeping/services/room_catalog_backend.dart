@@ -1,4 +1,5 @@
 import '../models/room.dart';
+import 'inspection_scoring.dart';
 
 enum RoomCatalogAction {
   create,
@@ -9,6 +10,7 @@ enum RoomCatalogAction {
   renameFloor,
   setCategoryTasks,
   setCategoryEstimate,
+  setInspectionRules,
 }
 
 /// A category's default task list, applied to its new and idle rooms.
@@ -29,6 +31,11 @@ class RoomCatalogSnapshot {
 
   /// Estimated cleaning minutes per category, with their versions.
   final Map<String, ({int minutes, int version})> estimates;
+
+  /// Inspection threshold and item weights per category.
+  final Map<String, InspectionRules> inspectionRules;
+  InspectionRules rulesFor(String category) =>
+      inspectionRules[category] ?? const InspectionRules();
   const RoomCatalogSnapshot(
     this.rooms,
     this.archivedRooms, {
@@ -36,6 +43,7 @@ class RoomCatalogSnapshot {
     this.floorVersions = const {},
     this.categoryTasks = const {},
     this.estimates = const {},
+    this.inspectionRules = const {},
   });
 
   String floorName(int floor) => floorNames[floor] ?? 'Étage $floor';
@@ -75,6 +83,10 @@ class RoomCatalogSnapshot {
             (e.value['tasks'] as List).cast<String>(),
             e.value['version'] as int,
           ),
+      },
+      inspectionRules: {
+        for (final e in (map['inspectionRules'] as Map? ?? {}).entries)
+          e.key as String: InspectionRules.fromMap(e.value as Map),
       },
       estimates: {
         for (final e in (map['estimates'] as Map? ?? {}).entries)

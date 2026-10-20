@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'inspection_scoring.dart';
+
 // Small state changes shared by user actions and by other modules' events.
 // They work on the persisted room shape read by HousekeepingStore.
 
@@ -70,4 +72,32 @@ void dropOpenCleaning(Map<String, dynamic> state, String number) {
   (state['timerSegments'] as List? ?? []).removeWhere(
     (t) => dropped.contains(t['cleaning_id']),
   );
+}
+
+/// Sets a category's inspection threshold and item weights (supervisor in
+/// the housekeeping rules, Manager in the catalog: same checks).
+void setInspectionRules(
+  Map<String, dynamic> state,
+  String category,
+  Map<String, dynamic> body,
+  Never Function(String message, [int status]) fail,
+) {
+  final reason = invalidRules(body['threshold'], body['weights']);
+  if (reason != null) fail(reason);
+  final rules =
+      state.putIfAbsent('inspectionRules', () => <String, dynamic>{}) as Map;
+  final current = rules[category] as Map?;
+  if (current != null &&
+      body['version'] != null &&
+      body['version'] != current['version']) {
+    fail('Ce barème a changé. Actualisez.', 409);
+  }
+  rules[category] = {
+    'threshold': body['threshold'],
+    'weights': {
+      for (final e in (body['weights'] as Map).entries)
+        (e.key as String).trim(): e.value,
+    },
+    'version': ((current?['version'] as int?) ?? 0) + 1,
+  };
 }

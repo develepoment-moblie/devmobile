@@ -8,7 +8,9 @@ import '../services/auto_assignment.dart';
 import '../services/housekeeping_backend.dart';
 import '../services/mutation_meta.dart';
 import '../services/sqlite_housekeeping.dart';
+import '../services/inspection_scoring.dart';
 import 'cleaning_stats.dart';
+import 'inspection.dart';
 import 'lost_item.dart';
 import 'room.dart';
 import 'supply.dart';
@@ -46,6 +48,28 @@ class HotelData extends ChangeNotifier {
   final List<HotelNotification> notifications = [];
   final List<CleaningRecord> cleanings = [];
   final List<LostItem> lostItems = [];
+  final List<Inspection> inspections = [];
+  final Map<String, InspectionRules> inspectionRules = {};
+  InspectionRules rulesFor(String category) =>
+      inspectionRules[category] ?? const InspectionRules();
+
+  /// A room's inspection rounds, newest first.
+  List<Inspection> inspectionsOf(String number) => [
+    for (final i in inspections.reversed)
+      if (i.roomNumber == number) i,
+  ];
+
+  /// The send-back the agent is working on: the latest round, when the room
+  /// was sent back and is being cleaned again.
+  Inspection? sentBack(Room room) {
+    final latest = inspectionsOf(room.number).firstOrNull;
+    return latest != null &&
+            !latest.approved &&
+            room.cleaning == CleaningStatus.inProgress
+        ? latest
+        : null;
+  }
+
   final Map<int, String> floorNames = {};
 
   /// Estimated cleaning minutes per room category (Manager's settings).
@@ -214,6 +238,18 @@ class HotelData extends ChangeNotifier {
         for (final item in json['lostItems'] as List? ?? [])
           LostItem.fromMap(item as Map),
       ]);
+    inspections
+      ..clear()
+      ..addAll([
+        for (final i in json['inspections'] as List? ?? [])
+          Inspection.fromMap(i as Map),
+      ]);
+    inspectionRules
+      ..clear()
+      ..addAll({
+        for (final e in (json['inspectionRules'] as Map? ?? {}).entries)
+          e.key as String: InspectionRules.fromMap(e.value as Map),
+      });
     floorNames
       ..clear()
       ..addAll({
@@ -378,6 +414,64 @@ class HotelData extends ChangeNotifier {
 
   Future<void> approve(Room room) =>
       _remote('/v1/rooms/${room.number}/approve', {'version': room.version});
+
+  // ---------------------------------------------------------- inspection
+  List<Map<String, dynamic>> _ratings(List<ItemRating> ratings) => [
+    for (final r in ratings)
+      {
+        'taskId': r.taskId,
+        'rating': r.rating.name,
+        if (r.comment.trim().isNotEmpty) 'comment': r.comment.trim(),
+        if (r.photo != null) 'photo': base64Encode(r.photo!),
+      },
+  ];
+
+  /// Score of [ratings] with the room's category weights.
+  int scoreOf(Room room, List<ItemRating> ratings) {
+    final rules = rulesFor(room.category);
+    final labels = {for (final t in room.tasks) t.id: t.label};
+    return inspectionScore([
+      for (final r in ratings)
+        (weight: rules.weightOf(labels[r.taskId] ?? ''), rating: r.rating),
+    ]);
+  }
+
+  /// Approves with the inspection (score must reach the threshold).
+  Future<void> approveInspected(Room room, List<ItemRating> ratings) => _remote(
+    '/v1/rooms/${room.number}/approve',
+    {'version': room.version, 'ratings': _ratings(ratings)},
+  );
+
+  /// "Renvoyer en nettoyage": back to the same agent with the failed items.
+  Future<void> sendBack(Room room, List<ItemRating> ratings, String comment) =>
+      _remote('/v1/rooms/${room.number}/refuse', {
+        'version': room.version,
+        'ratings': _ratings(ratings),
+        if (comment.trim().isNotEmpty) 'comment': comment.trim(),
+      });
+
+  Future<void> setInspectionRules(
+    String category, {
+    required int threshold,
+    required Map<String, int> weights,
+  }) => _remote('/v1/inspection-rules/${Uri.encodeComponent(category)}/set', {
+    'threshold': threshold,
+    'weights': weights,
+    if (inspectionRules[category] case final rules?) 'version': rules.version,
+  });
+
+  Future<Uint8List> inspectionPhoto(
+    Inspection inspection,
+    InspectionItem item,
+  ) async {
+    final backend = api;
+    if (backend is SqliteHousekeeping) {
+      return base64Decode(
+        await backend.inspectionPhoto(inspection.id, item.id),
+      );
+    }
+    throw const HousekeepingException('Photos indisponibles.');
+  }
 
   /// The supervisor or the assigned agent reports a problem to maintenance.
   bool canReport(Room room) =>

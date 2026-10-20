@@ -122,8 +122,11 @@ void main() {
       'housekeeping_category_estimates',
       'housekeeping_availability',
       'housekeeping_mutations',
+      'housekeeping_inspections',
+      'housekeeping_inspection_items',
+      'housekeeping_inspection_rules',
     });
-    expect(await session.database.versionOf('housekeeping'), 3);
+    expect(await session.database.versionOf('housekeeping'), 4);
     login('amina');
     final state = await backend.snapshot();
     expect((state['rooms'] as List), hasLength(16));
@@ -203,6 +206,9 @@ void main() {
         'housekeeping_category_estimates',
         'housekeeping_availability',
         'housekeeping_mutations',
+        'housekeeping_inspection_items',
+        'housekeeping_inspections',
+        'housekeeping_inspection_rules',
       ]) {
         await db.execute('DROP TABLE $table');
       }
@@ -213,7 +219,7 @@ void main() {
         'version': 1,
       }, where: "module = 'housekeeping'");
       await reopen();
-      expect(await session.database.versionOf('housekeeping'), 3);
+      expect(await session.database.versionOf('housekeeping'), 4);
       final kept = await room('305');
       expect((kept['employeeId'], kept['note']), ('sarah', 'Avant midi'));
       expect((kept['stayover'], kept['feedback']), (false, null));
@@ -223,7 +229,7 @@ void main() {
     },
   );
 
-  test('a version 2 database upgrades to version 3 in place', () async {
+  test('a version 2 database upgrades in place', () async {
     login('amina');
     await action(
       'assign',
@@ -236,11 +242,19 @@ void main() {
       'housekeeping_category_estimates',
       'housekeeping_availability',
       'housekeeping_mutations',
+      'housekeeping_inspection_items',
+      'housekeeping_inspections',
+      'housekeeping_inspection_rules',
     ]) {
       await db.execute('DROP TABLE $table');
     }
     await db.execute('ALTER TABLE housekeeping_rooms DROP COLUMN priority');
-    for (final column in ['finished_at', 'duration_ms']) {
+    for (final column in [
+      'finished_at',
+      'duration_ms',
+      'inspection_score',
+      'inspection_rounds',
+    ]) {
       await db.execute(
         'ALTER TABLE housekeeping_cleanings DROP COLUMN $column',
       );
@@ -249,7 +263,7 @@ void main() {
       'version': 2,
     }, where: "module = 'housekeeping'");
     await reopen();
-    expect(await session.database.versionOf('housekeeping'), 3);
+    expect(await session.database.versionOf('housekeeping'), 4);
     final kept = await room('305');
     expect((kept['employeeId'], kept['priority']), ('sarah', 'normal'));
     expect((await store.readState())['cleanings'], hasLength(1));
