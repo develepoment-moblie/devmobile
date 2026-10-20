@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../../shared/custom/app_widgets.dart';
 import '../../shared/custom/nova_logo.dart';
 import '../models/app_user.dart';
+import '../services/password_management.dart';
 import '../services/user_repository.dart';
+import 'password_sheet.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final AppUser user;
@@ -30,6 +32,21 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       Text('${widget.user.points} points de fidélité'),
       const SizedBox(height: 24),
       if (error != null) Text(error!),
+      if (widget.auth case final PasswordManagement passwords) ...[
+        OutlinedButton.icon(
+          onPressed: busy
+              ? null
+              : () async {
+                  if (await showPasswordSheet(context, passwords) &&
+                      context.mounted) {
+                    showFeedback(context, 'Mot de passe modifié.');
+                  }
+                },
+          icon: const Icon(Icons.lock_reset),
+          label: const Text('Changer le mot de passe'),
+        ),
+        const SizedBox(height: 12),
+      ],
       OutlinedButton.icon(
         onPressed: busy
             ? null

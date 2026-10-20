@@ -262,6 +262,7 @@ void main() {
   test('v1 database upgrades to variable tasks without keeping unverified dirty completions', () async {
     await login('sarah');
     await store.storage.database.execute('DROP TABLE task_photos');
+    await store.storage.database.execute('DROP TABLE priorities');
     await store.storage.database.execute('ALTER TABLE rooms DROP COLUMN tasks');
     await store.storage.database.execute('PRAGMA user_version = 1');
     await store.dispose();
@@ -272,7 +273,8 @@ void main() {
     backend = SqliteHousekeeping(store);
     expect((await room())['tasks'].length, 4);
     expect((await room())['cleaning'], 'waiting');
-    expect(await store.storage.database.getVersion(), 2);
+    expect(await store.storage.database.getVersion(), 3);
+    expect(await store.storage.database.query('priorities'), hasLength(3));
     expect(store.sessionUserId, 'sarah');
   });
   test('archived rooms keep their task definitions and restoring clears old evidence', () async {

@@ -4,7 +4,9 @@ import '../../shared/custom/app_theme.dart';
 import '../../shared/custom/app_widgets.dart';
 import '../../shared/custom/draft_guard.dart';
 import '../models/app_user.dart';
+import '../services/password_management.dart';
 import '../services/user_repository.dart';
+import 'password_sheet.dart';
 
 // Adapted from the friend's user list and form sheet, with confirmed remote saves.
 class ManageUsersScreen extends StatefulWidget {
@@ -99,6 +101,12 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
     } finally {
       if (mounted) setState(() => deleting = false);
     }
+  }
+
+  Future<void> resetPassword(PasswordManagement passwords, AppUser user) async {
+    if (!await showPasswordSheet(context, passwords, user) || !mounted) return;
+    showFeedback(context, 'Mot de passe de ${user.fullName} réinitialisé.');
+    await reload();
   }
 
   @override
@@ -214,14 +222,25 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
                           trailing: PopupMenuButton<String>(
                             enabled: !deleting,
                             tooltip: 'Actions pour ${user.fullName}',
-                            onSelected: (action) =>
-                                action == 'edit' ? form(user) : remove(user),
-                            itemBuilder: (_) => const [
-                              PopupMenuItem(
+                            onSelected: (action) => switch (action) {
+                              'edit' => form(user),
+                              'password' => resetPassword(
+                                widget.auth as PasswordManagement,
+                                user,
+                              ),
+                              _ => remove(user),
+                            },
+                            itemBuilder: (_) => [
+                              const PopupMenuItem(
                                 value: 'edit',
                                 child: Text('Modifier'),
                               ),
-                              PopupMenuItem(
+                              if (widget.auth is PasswordManagement)
+                                const PopupMenuItem(
+                                  value: 'password',
+                                  child: Text('Réinitialiser le mot de passe'),
+                                ),
+                              const PopupMenuItem(
                                 value: 'delete',
                                 child: Text('Supprimer le profil'),
                               ),

@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:nova_paris/shared/services/backup_codec.dart';
 import 'package:nova_paris/user_management/services/sqlite_user_repository.dart';
 import 'package:nova_paris/housekeeping/services/housekeeping_api.dart';
 import 'package:nova_paris/housekeeping/services/room_catalog_backend.dart';
@@ -60,6 +61,103 @@ void main() {
       expect(rows.map((row) => row['salt']).toSet().length, rows.length);
     },
   );
+
+  test('users change their password and managers reset others', () async {
+    await login('sarah');
+    await expectLater(store.changePassword('wrong!', 'nouveau1'), denied);
+    await expectLater(
+      store.changePassword(SqliteUserRepository.demoPassword, 'court'),
+      denied,
+    );
+    await store.changePassword(SqliteUserRepository.demoPassword, 'nouveau1');
+    await store.logout();
+    await expectLater(login('sarah'), denied);
+    await store.login('sarah@nova.test', 'nouveau1');
+
+    var sarah = (await store.currentProfile());
+    await expectLater(store.resetPassword(sarah, 'temp123'), denied);
+    await login('manager');
+    final manager = await store.currentProfile();
+    await expectLater(store.resetPassword(manager, 'temp123'), denied);
+    sarah = (await store.allProfiles()).firstWhere((u) => u.id == 'sarah');
+    await store.resetPassword(sarah, 'temp123');
+    await expectLater(store.resetPassword(sarah, 'stale12'), denied);
+    expect(store.sessionUserId, 'manager');
+
+    final reopened = await open();
+    addTearDown(reopened.dispose);
+    await expectLater(reopened.login('sarah@nova.test', 'nouveau1'), denied);
+    await reopened.login('sarah@nova.test', 'temp123');
+    final rows = await store.storage.database.query('users');
+    expect(
+      rows.any(
+        (row) => row.values.any(
+          (v) => v.toString().contains('temp123') ||
+              v.toString().contains('nouveau1'),
+        ),
+      ),
+      isFalse,
+    );
+  });
+
+  test('manager priorities are seeded, versioned and manager only', () async {
+    await login('sarah');
+    await expectLater(store.priorities(), denied);
+    await expectLater(
+      store.savePriority(
+        null,
+        icon: 'bed',
+        title: 'Agent',
+        subtitle: '',
+        colorType: 'danger',
+      ),
+      denied,
+    );
+    await login('manager');
+    var items = await store.priorities();
+    expect(items.map((p) => p.title), contains('Arrivée VIP'));
+    await store.savePriority(
+      null,
+      icon: 'spa',
+      title: 'Spa fermé',
+      subtitle: 'Jusqu’à 14h',
+      colorType: 'terra',
+    );
+    await expectLater(
+      store.savePriority(
+        null,
+        icon: 'unknown',
+        title: 'Bad',
+        subtitle: '',
+        colorType: 'danger',
+      ),
+      denied,
+    );
+    items = await store.priorities();
+    final spa = items.first;
+    expect(spa.title, 'Spa fermé');
+    await store.savePriority(
+      spa,
+      icon: 'spa',
+      title: 'Spa rouvert',
+      subtitle: '',
+      colorType: 'success',
+    );
+    await expectLater(store.deletePriority(spa), denied);
+    final reopened = await open();
+    addTearDown(reopened.dispose);
+    final updated = (await reopened.priorities()).firstWhere(
+      (p) => p.id == spa.id,
+    );
+    expect((updated.title, updated.version), ('Spa rouvert', 2));
+    await reopened.deletePriority(updated);
+    expect((await store.priorities()).any((p) => p.id == spa.id), isFalse);
+    final snapshot = await store.backupSnapshot();
+    expect(snapshot['priorities'], isNotEmpty);
+    expect(() => BackupCodec.validate(snapshot), returnsNormally);
+    snapshot.remove('priorities');
+    expect(() => BackupCodec.validate(snapshot), returnsNormally);
+  });
 
   test(
     'registration is guest only and agents cannot manage users or stock',

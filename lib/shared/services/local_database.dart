@@ -5,6 +5,30 @@ import 'package:sqflite/sqflite.dart';
 
 import 'task_schema.dart';
 
+const _prioritiesTable = '''CREATE TABLE priorities (
+  id TEXT PRIMARY KEY, icon TEXT NOT NULL, title TEXT NOT NULL,
+  subtitle TEXT NOT NULL, color_type TEXT NOT NULL CHECK(color_type IN
+  ('danger','success','terra')), created_at TEXT NOT NULL,
+  version INTEGER NOT NULL)''';
+
+/// Example manager priorities, adapted from the Gestion User branch.
+List<Map<String, Object>> seedPriorities() => [
+  for (final (id, icon, title, subtitle, color) in const [
+    ('seed-ac', 'ac_unit', 'Climatisation en panne', 'Ch. 224 · Urgent', 'danger'),
+    ('seed-vip', 'calendar', 'Arrivée VIP', 'Ch. 305 · 14:30', 'success'),
+    ('seed-review', 'bed', 'Chambres à valider', 'Ménage · Gouvernante', 'terra'),
+  ])
+    {
+      'id': id,
+      'icon': icon,
+      'title': title,
+      'subtitle': subtitle,
+      'color_type': color,
+      'created_at': '2026-10-18T08:00:00.000',
+      'version': 1,
+    },
+];
+
 /// One device-local database shared by the two feature adapters.
 /// No connection to, or automatic import from, any external service or the old demo.
 class LocalDatabase {
@@ -21,7 +45,7 @@ class LocalDatabase {
     final db = await driver.openDatabase(
       location,
       options: OpenDatabaseOptions(
-        version: 2,
+        version: 3,
         singleInstance: false,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, version) async {
@@ -60,6 +84,7 @@ class LocalDatabase {
           await db.execute(
             'CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
           );
+          await db.execute(_prioritiesTable);
         },
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) {
@@ -73,6 +98,12 @@ class LocalDatabase {
             await db.rawUpdate(
               "UPDATE rooms SET checklist = '[false,false,false,false]', cleaning = 'waiting', version = version + 1 WHERE status = 'dirty'",
             );
+          }
+          if (oldVersion < 3) {
+            await db.execute(_prioritiesTable);
+            for (final row in seedPriorities()) {
+              await db.insert('priorities', row);
+            }
           }
         },
       ),
@@ -122,6 +153,10 @@ class LocalDatabase {
         orderBy: 'position',
       )).map((r) => Map<String, dynamic>.from(r)).toList(),
       'reads': reads,
+      'priorities': (await executor.query(
+        'priorities',
+        orderBy: 'created_at DESC, id',
+      )).map((r) => Map<String, dynamic>.from(r)).toList(),
     };
   }
 
@@ -209,6 +244,21 @@ class LocalDatabase {
           'position': i,
         },
     ]);
+    await sync('priorities', 'id', [
+      for (final p in state['priorities'] as List? ?? [])
+        {
+          for (final k in [
+            'id',
+            'icon',
+            'title',
+            'subtitle',
+            'color_type',
+            'created_at',
+            'version',
+          ])
+            k: p[k],
+        },
+    ]);
     // Read receipts are small and have a composite key.
     await tx.delete('notification_reads');
     for (final entry in (state['reads'] as Map).entries) {
@@ -282,6 +332,7 @@ class LocalDatabase {
     for (final table in [
       'notification_reads',
       'task_photos',
+      'priorities',
       'notifications',
       'rooms',
       'supplies',

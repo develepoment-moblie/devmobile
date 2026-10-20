@@ -308,6 +308,22 @@ class BackupCodec {
         );
         require(['all', 'agent', 'supervisor'].contains(n['audience']));
       }
+      // Optional: backups made before manager priorities have none.
+      if (state['priorities'] != null) {
+        final priorityIds = <String>{};
+        for (final p in rows('priorities')) {
+          require(
+            text(p['id'], 200) &&
+                priorityIds.add(p['id'] as String) &&
+                text(p['icon'], 40) &&
+                text(p['title'], 120) &&
+                text(p['subtitle'], 200, empty: true) &&
+                ['danger', 'success', 'terra'].contains(p['color_type']) &&
+                DateTime.tryParse(p['created_at'] as String) != null &&
+                integer(p['version'], 1, 2147483647),
+          );
+        }
+      }
       require(state['reads'] is Map);
       for (final entry in (state['reads'] as Map).entries) {
         require(ids.contains(entry.key) && entry.value is List);

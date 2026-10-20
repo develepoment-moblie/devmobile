@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/app_user.dart';
 import '../services/user_repository.dart';
+import 'profile_screen.dart';
 import '../../shared/custom/nova_logo.dart';
 import '../../shared/custom/app_theme.dart';
 import '../../shared/custom/app_widgets.dart';
@@ -76,7 +77,18 @@ class _Header extends StatelessWidget {
             ),
           ),
         ),
-        const _CircleIconButton(icon: Icons.notifications_none, onTap: null),
+        _CircleIconButton(
+          icon: Icons.person_outline,
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => Scaffold(
+                appBar: AppBar(title: const Text('Mon profil')),
+                body: UserProfileScreen(user: user, auth: auth),
+              ),
+            ),
+          ),
+        ),
         const SizedBox(width: 8),
         _CircleIconButton(
           icon: Icons.logout,
@@ -101,9 +113,7 @@ class _CircleIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      tooltip: icon == Icons.logout
-          ? 'Se déconnecter'
-          : 'Notifications indisponibles',
+      tooltip: icon == Icons.logout ? 'Se déconnecter' : 'Mon profil',
       onPressed: onTap,
       style: IconButton.styleFrom(
         backgroundColor: Colors.white,
@@ -389,7 +399,7 @@ class _SearchCardState extends State<_SearchCard> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'Recherche : ${_formatDate(_arrival)} → ${_formatDate(_departure)} · $_guests pers.',
+          'Du ${_formatDate(_arrival)} au ${_formatDate(_departure)} · $_guests pers. La réservation en ligne arrive bientôt : contactez la réception pour ces dates.',
         ),
       ),
     );
@@ -552,7 +562,8 @@ class _SectionHeader extends StatelessWidget {
             ),
           ),
         ),
-        TextButton(
+        if (onTap != null)
+          TextButton(
           onPressed: onTap,
           child: const Row(
             children: [

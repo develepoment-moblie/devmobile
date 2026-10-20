@@ -15,7 +15,10 @@ import '../../shared/services/local_attachment_store.dart';
 import '../../shared/services/task_schema.dart';
 import '../../shared/services/local_session_store.dart';
 import '../models/app_user.dart';
+import '../models/priority.dart';
 import 'demo_accounts.dart';
+import 'password_management.dart';
+import 'priority_board.dart';
 import 'user_repository.dart';
 
 // Device-local course application. Permissions are enforced locally, not by a server.
@@ -23,6 +26,8 @@ class SqliteUserRepository
     implements
         UserRepository,
         DemoAccounts,
+        PasswordManagement,
+        PriorityBoard,
         LocalSessionStore,
         BackupRepository,
         LocalAttachmentStore {
@@ -83,6 +88,7 @@ class SqliteUserRepository
     }
     state['users'] = <dynamic>[];
     state['reads'] = <String, dynamic>{};
+    state['priorities'] = seedPriorities();
     final store = SqliteUserRepository._(storage, state);
 
     for (final entry in {
@@ -347,6 +353,100 @@ class SqliteUserRepository
     });
     _events.add(null);
   }
+
+  void _password(String password) {
+    if (password.length < 6) {
+      _fail('Utilisez un mot de passe de 6 caractères minimum.');
+    }
+  }
+
+  @override
+  Future<void> changePassword(String current, String next) => _change((s) {
+    final row = _actor(s);
+    if (_hash(current, row['salt'] as String) != row['hash']) {
+      _fail('Mot de passe actuel incorrect.', 401);
+    }
+    _password(next);
+    if (current == next) {
+      _fail('Choisissez un mot de passe différent de l’actuel.');
+    }
+    row.addAll(_credentials(next));
+    row['revision'] = (row['revision'] as int) + 1;
+  });
+
+  @override
+  Future<void> resetPassword(AppUser original, String temporary) =>
+      _change((s) {
+        _password(temporary);
+        final row = _target(s, original);
+        row.addAll(_credentials(temporary));
+        row['revision'] = (row['revision'] as int) + 1;
+      });
+
+  @override
+  Future<List<Priority>> priorities() async {
+    await _reload();
+    _manager(_state);
+    return [
+      for (final p in _state['priorities'] as List? ?? [])
+        Priority.fromMap(p as Map<String, dynamic>),
+    ];
+  }
+
+  Map<String, dynamic> _priority(Map<String, dynamic> s, Priority original) {
+    final row = (s['priorities'] as List? ?? [])
+        .cast<Map<String, dynamic>>()
+        .where((p) => p['id'] == original.id)
+        .firstOrNull;
+    if (row == null || row['version'] != original.version) {
+      _fail('Cette priorité a changé. Actualisez la liste.', 409);
+    }
+    return row;
+  }
+
+  @override
+  Future<void> savePriority(
+    Priority? original, {
+    required String icon,
+    required String title,
+    required String subtitle,
+    required String colorType,
+  }) => _change((s) {
+    _manager(s);
+    if (title.trim().isEmpty ||
+        title.trim().length > 120 ||
+        subtitle.trim().length > 200 ||
+        !Priority.icons.contains(icon) ||
+        !Priority.colorTypes.contains(colorType)) {
+      _fail('Vérifiez le titre, les détails, l’icône et la couleur.');
+    }
+    final fields = {
+      'icon': icon,
+      'title': title.trim(),
+      'subtitle': subtitle.trim(),
+      'color_type': colorType,
+    };
+    if (original == null) {
+      ((s['priorities'] ??= <dynamic>[]) as List).insert(0, {
+        'id':
+            'priority-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}',
+        ...fields,
+        'created_at': DateTime.now().toIso8601String(),
+        'version': 1,
+      });
+    } else {
+      final row = _priority(s, original);
+      row.addAll(fields);
+      row['version'] = (row['version'] as int) + 1;
+    }
+  });
+
+  @override
+  Future<void> deletePriority(Priority original) => _change((s) {
+    _manager(s);
+    final row = _priority(s, original);
+    (s['priorities'] as List).remove(row);
+  });
 
   @override
   Future<void> deleteProfile(AppUser original) async {

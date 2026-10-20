@@ -38,6 +38,9 @@ Mot de passe initial commun : `Nova123!`.
 Les pastilles remplissent les identifiants sans connecter automatiquement.
 Le Manager peut créer des comptes utilisables sur cet appareil. L'inscription
 publique crée un client et le connecte immédiatement, sans confirmation e-mail.
+Chaque utilisateur change son mot de passe depuis son Profil. En cas d’oubli,
+le Manager le réinitialise depuis Utilisateurs avec un mot de passe temporaire.
+Le Manager gère aussi la liste des Priorités affichée sur son accueil.
 
 Pour tester : Amina attribue la chambre 305 à Sarah ; Sarah démarre, coche les
 tous les contrôles avec leurs photos et termine ; Amina valide. Le Manager peut créer, modifier,

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../shared/custom/app_theme.dart';
 import '../../shared/custom/nova_logo.dart';
 import '../services/demo_accounts.dart';
+import '../services/password_management.dart';
 import '../services/user_repository.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -57,6 +58,25 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) setState(() => busy = false);
     }
   }
+
+  // No e-mail service on the device: a Manager sets a temporary password.
+  Future<void> forgotPassword() => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      scrollable: true,
+      title: const Text('Mot de passe oublié'),
+      content: const Text(
+        'Les comptes sont enregistrés uniquement sur cet appareil. Demandez au Manager de réinitialiser votre mot de passe depuis Utilisateurs, puis changez-le depuis votre profil après connexion.',
+      ),
+      actions: [
+        FilledButton(
+          autofocus: true,
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Compris'),
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -212,6 +232,11 @@ class _LoginScreenState extends State<LoginScreen> {
                           : Text(register ? 'Créer un compte' : 'Se connecter'),
                     ),
                   ),
+                  if (!register && widget.auth is PasswordManagement)
+                    TextButton(
+                      onPressed: busy ? null : forgotPassword,
+                      child: const Text('Mot de passe oublié ?'),
+                    ),
                   TextButton(
                     onPressed: busy
                         ? null

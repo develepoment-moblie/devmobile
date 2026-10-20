@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../../shared/custom/app_widgets.dart';
 import '../models/app_user.dart';
+import '../models/priority.dart';
+import '../services/priority_board.dart';
 import '../services/user_repository.dart';
+import 'manage_priorities.dart';
 import 'manage_users.dart';
 import 'profile_screen.dart';
 
@@ -65,6 +68,10 @@ class ManagerHome extends StatelessWidget {
           icon: const Icon(Icons.people_alt_outlined),
           label: const Text('Gérer les utilisateurs'),
         ),
+        if (auth case final PriorityBoard board) ...[
+          const SizedBox(height: 28),
+          _PrioritiesSection(board: board),
+        ],
         if (roomsBuilder != null) ...[
           const SizedBox(height: 28),
           const Text(
@@ -107,5 +114,66 @@ class ManagerHome extends StatelessWidget {
         ],
       ],
     ),
+  );
+}
+
+class _PrioritiesSection extends StatefulWidget {
+  final PriorityBoard board;
+  const _PrioritiesSection({required this.board});
+  @override
+  State<_PrioritiesSection> createState() => _PrioritiesSectionState();
+}
+
+class _PrioritiesSectionState extends State<_PrioritiesSection> {
+  late Future<List<Priority>> future = widget.board.priorities();
+
+  Future<void> open() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => ManagePrioritiesScreen(board: widget.board),
+      ),
+    );
+    if (mounted) setState(() => future = widget.board.priorities());
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      const Text(
+        'Priorités',
+        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 8),
+      const Text('Les points à suivre aujourd’hui pour l’équipe.'),
+      const SizedBox(height: 12),
+      FutureBuilder<List<Priority>>(
+        future: future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Padding(
+              padding: EdgeInsets.all(12),
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (snap.hasError) return Text(userError(snap.error!));
+          final items = snap.data ?? [];
+          if (items.isEmpty) return const Text('Aucune priorité pour le moment.');
+          return Column(
+            children: [
+              for (final priority in items.take(3))
+                PriorityTile(priority: priority, onTap: open),
+            ],
+          );
+        },
+      ),
+      const SizedBox(height: 12),
+      FilledButton.icon(
+        onPressed: open,
+        icon: const Icon(Icons.priority_high_rounded),
+        label: const Text('Gérer les priorités'),
+      ),
+    ],
   );
 }

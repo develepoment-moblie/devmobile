@@ -135,3 +135,49 @@ L'installation et le parcours interactif de cette version sur téléphone resten
 - Build release arm64 réussi (20,3 Mo). Caméra/galerie natives : validation manuelle
   sur téléphone encore nécessaire ; les tests écran utilisent un picker injecté.
 - Installation finale adb install -r : Success ; lancement natif vérifié. Test ciblé supplémentaire de compatibilité des sauvegardes avec photos : réussi.
+
+## 2026-10-20 — Mots de passe et accueil client
+
+- Profil : « Changer le mot de passe » (mot de passe actuel requis, 6 caractères
+  minimum, confirmation). Disponible pour tous les rôles, client compris.
+- Manager/admin : Utilisateurs → « Réinitialiser le mot de passe » avec un mot de
+  passe temporaire. Version vérifiée ; son propre compte passe par le Profil.
+- Connexion : « Mot de passe oublié ? » explique la réinitialisation par le Manager
+  (aucun service d’e-mail local). Contrat optionnel PasswordManagement ; les
+  démonstrations héritées restent inchangées.
+- Accueil client : bouton Profil à la place de la cloche inactive, « Tout voir »
+  inactif masqué, recherche de dates orientée vers la réception.
+- flutter analyze : aucune anomalie. flutter test : 109 réussis, 1 ancien test
+  dépendant du serveur ignoré. Mots de passe jamais stockés en clair (test ajouté).
+- Nettoyage : anciens journaux de crash JVM/Kotlin supprimés. Archive de rendu
+  ../nova_paris-submission.zip générée selon .gitignore (sans build, .dart_tool,
+  backend/.dev, données SQLite ni chemins locaux).
+
+## 2026-10-20 — Fusion de la branche Gestion-user (Skander256)
+
+Source : github.com/develepoment-moblie/devmobile, branche Gestion-user, commit 8101a00.
+
+Repris et adapté :
+- Priorités du Manager (liste, ajout, modification, suppression ; icône et type).
+  Table SQLite priorities (schéma v3), version vérifiée, actions réservées au
+  Manager/admin, incluses dans les sauvegardes (optionnelles pour les anciennes).
+  Trois exemples fictifs ajoutés à la création et à la migration 2 → 3.
+- Accueil Manager : section Priorités (trois premières) et bouton de gestion.
+
+Non repris :
+- DatabaseHelper : mots de passe et réponses secrètes en clair, suppression
+  définitive, aucune vérification de rôle, même fichier nova_paris.db avec un
+  schéma incompatible.
+- Réinitialisation Firebase : nécessite Internet, n’agit que sur des comptes
+  Firebase (inexistants ici) et contient une clé API publiée. Remplacée par la
+  réinitialisation locale du Manager.
+- Connexion Google : configuration OAuth absente, mot de passe en clair prévisible
+  pour les comptes créés. flutter_facebook_auth : dépendance inutilisée.
+- Statistiques (82 %, 24,8 k€), profil (Visa, réservations) et accueil agent :
+  valeurs fictives fixes ; facturation et réservations relèvent d’autres modules,
+  et l’espace agent réel existe déjà.
+- Changement rapide de rôle : déjà couvert par Modifier, avec confirmation.
+
+- flutter analyze : aucune anomalie. flutter test : 110 réussis, 1 ancien test
+  dépendant du serveur ignoré. Test ajouté : priorités, permissions, conflit de
+  version, persistance et sauvegarde ; test de migration étendu à v3.
