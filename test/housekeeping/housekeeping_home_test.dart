@@ -88,6 +88,41 @@ void main() {
     expect(room['status'], 'maintenance');
   });
 
+  testWidgets('the header arrow leaves the module even after visiting tabs', (
+    tester,
+  ) async {
+    session.signIn(TestStaff.people.firstWhere((u) => u.id == 'amina'));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: novaTheme(),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (context) =>
+                      const HousekeepingModule().buildHome(context, session),
+                ),
+              ),
+              child: const Text('Accueil de l’app'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Accueil de l’app'));
+    await settle(tester);
+    await tester.tap(find.text('Stock').last);
+    await tester.pump();
+    await tester.tap(find.text('Ménage').last);
+    await tester.pump();
+    await tester.tap(find.byTooltip('Retour à l’accueil'));
+    await tester.pumpAndSettle();
+    expect(find.text('Accueil de l’app'), findsOneWidget);
+    expect(find.text('Stock'), findsNothing);
+  });
+
   testWidgets('the manager gets the room catalog', (tester) async {
     await open(tester, 'manager');
     expect(find.byType(ManageRoomsScreen), findsOneWidget);

@@ -24,6 +24,10 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_driver:
+    sdk: flutter
   flutter_lints: ^6.0.0
   sqflite_common_ffi: ^2.4.4
 
@@ -31,6 +35,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/nova_paris_logo.png
+    - assets/images/nova_paris_logo_light.png
   fonts:
     - family: Manrope
       fonts:

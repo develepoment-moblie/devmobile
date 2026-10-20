@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/custom/animations.dart';
 import '../../shared/custom/app_theme.dart';
+import '../../shared/custom/app_widgets.dart';
 import '../../shared/custom/nova_logo.dart';
 import '../../shared/models/app_user.dart';
 import '../../shared/services/app_session.dart';
@@ -28,62 +30,198 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Form(
-            key: form,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Center(child: NovaLogo(size: 132)),
-                const SizedBox(height: 12),
-                const Text(
-                  'Bienvenue à Nova Paris',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.primary,
+    body: CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: HeroHeader(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
+            child: FadeSlideIn(
+              offset: const Offset(0, -12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const SizedBox(width: double.infinity),
+                  const NovaLogo(size: 116, light: true),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Bienvenue',
+                    style: Theme.of(context).textTheme.headlineSmall
+                        ?.copyWith(color: Colors.white),
                   ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Connexion de test : choisissez une personne pour ouvrir les modules de son rôle.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: AppColors.muted),
-                ),
-                const SizedBox(height: 24),
-                DropdownButtonFormField<AppUser>(
-                  initialValue: person,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Personne'),
-                  items: [
-                    for (final user in DemoStaffDirectory.people)
-                      DropdownMenuItem(
-                        value: user,
-                        child: Text('${user.fullName} · ${user.roleLabel}'),
+                  const SizedBox(height: 6),
+                  Text(
+                    'L’hôtel, toutes équipes réunies.',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: .75),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
+          sliver: SliverToBoxAdapter(
+            child: Form(
+              key: form,
+              child: FormField<AppUser>(
+                validator: (_) =>
+                    person == null ? 'Choisissez une personne.' : null,
+                builder: (field) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Qui êtes-vous ?',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Connexion de test : choisissez une personne pour ouvrir les modules de son rôle.',
+                      style: TextStyle(color: AppColors.muted),
+                    ),
+                    const SizedBox(height: 16),
+                    LayoutBuilder(
+                      builder: (context, constraints) => Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: [
+                          for (final (i, user)
+                              in DemoStaffDirectory.people.indexed)
+                            SizedBox(
+                              width: (constraints.maxWidth - 10) / 2,
+                              child: FadeSlideIn(
+                                index: i,
+                                child: _PersonTile(
+                                  user: user,
+                                  selected: person == user,
+                                  onTap: () {
+                                    setState(() => person = user);
+                                    field.didChange(user);
+                                  },
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
+                    ),
+                    const SizedBox(height: 10),
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 200),
+                      child: field.hasError
+                          ? Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Text(
+                                field.errorText!,
+                                style: const TextStyle(color: AppColors.red),
+                              ),
+                            )
+                          : const SizedBox(width: double.infinity),
+                    ),
+                    const SizedBox(height: 8),
+                    FilledButton.icon(
+                      onPressed: submit,
+                      icon: const Icon(Icons.arrow_forward_rounded),
+                      iconAlignment: IconAlignment.end,
+                      label: Text(
+                        person == null
+                            ? 'Entrer (mode test)'
+                            : 'Entrer · ${person!.firstName}',
+                      ),
+                    ),
                   ],
-                  onChanged: (value) => setState(() => person = value),
-                  validator: (value) =>
-                      value == null ? 'Choisissez une personne.' : null,
                 ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  height: 50,
-                  child: FilledButton(
-                    onPressed: submit,
-                    child: const Text('Entrer (mode test)'),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _PersonTile extends StatelessWidget {
+  final AppUser user;
+  final bool selected;
+  final VoidCallback onTap;
+  const _PersonTile({
+    required this.user,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = roleColor(user.role);
+    return Semantics(
+      selected: selected,
+      button: true,
+      label: '${user.fullName} · ${user.roleLabel}',
+      excludeSemantics: true,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          color: selected ? AppColors.greenLight : Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: selected ? AppColors.primary : AppColors.border,
+            width: selected ? 1.6 : 1,
+          ),
+          boxShadow: selected ? AppShadows.soft : const [],
+        ),
+        child: PressableScale(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    InitialsAvatar(name: user.fullName, color: color, size: 40),
+                    const Spacer(),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      transitionBuilder: (child, animation) =>
+                          ScaleTransition(scale: animation, child: child),
+                      child: selected
+                          ? const Icon(
+                              Icons.check_circle_rounded,
+                              key: ValueKey('on'),
+                              color: AppColors.primary,
+                            )
+                          : const Icon(
+                              Icons.circle_outlined,
+                              key: ValueKey('off'),
+                              color: AppColors.border,
+                            ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  user.fullName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
                   ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  user.roleLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: color, fontSize: 12),
                 ),
               ],
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

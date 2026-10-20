@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/custom/animations.dart';
+
 import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../custom/agent_room_card.dart';
@@ -83,11 +85,11 @@ class AgentDashboardScreen extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            '${item.$2}',
+                          AnimatedCount(
+                            item.$2,
                             style: const TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w700,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w800,
                             ),
                           ),
                           Text(item.$3, style: const TextStyle(fontSize: 13)),

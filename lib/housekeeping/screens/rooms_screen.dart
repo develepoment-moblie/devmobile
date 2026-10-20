@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/custom/animations.dart';
 import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../custom/roomcard.dart';
@@ -148,25 +149,28 @@ class _RoomsScreenState extends State<RoomsScreen> {
             child: const Text('Réinitialiser les filtres'),
           ),
         ],
-        ...rooms.map(
-          (room) => Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
-            child: Roomcard(
-              room: room,
-              cleaning: false,
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        DetailsScreen(data: widget.data, room: room),
-                  ),
-                );
-                if (mounted) setState(() {});
-              },
+        for (final (i, room) in rooms.indexed)
+          FadeSlideIn(
+            key: ValueKey('$status-$floor-${room.number}'),
+            index: i,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+              child: Roomcard(
+                room: room,
+                cleaning: false,
+                onTap: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          DetailsScreen(data: widget.data, room: room),
+                    ),
+                  );
+                  if (mounted) setState(() {});
+                },
+              ),
             ),
           ),
-        ),
         const SizedBox(height: 24),
       ],
     );

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/custom/animations.dart';
 import '../../shared/custom/app_theme.dart';
 import '../models/room.dart';
 import 'roomcard.dart';
@@ -12,16 +13,14 @@ class AgentRoomCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (tone, background) = roomTone(room);
-    return Card(
-      margin: EdgeInsets.zero,
-      color: Colors.white,
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: const BorderSide(color: AppColors.border),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
       ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
+      child: PressableScale(
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -78,9 +77,8 @@ class AgentRoomCard extends StatelessWidget {
                   style: const TextStyle(fontSize: 12),
                 ),
                 const SizedBox(height: 6),
-                LinearProgressIndicator(
-                  value:
-                      room.checklist.where((v) => v).length / room.tasks.length,
+                AnimatedProgress(
+                  room.checklist.where((v) => v).length / room.tasks.length,
                   semanticsLabel:
                       'Progression du nettoyage de la chambre ${room.number}',
                 ),

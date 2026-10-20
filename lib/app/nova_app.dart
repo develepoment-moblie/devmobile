@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../shared/custom/app_theme.dart';
@@ -19,6 +20,14 @@ class NovaApp extends StatelessWidget {
     locale: const Locale('fr'),
     supportedLocales: const [Locale('fr')],
     localizationsDelegates: GlobalMaterialLocalizations.delegates,
+    // Transparent status bar so screens reach the top edge.
+    builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark.copyWith(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor: Colors.white,
+      ),
+      child: child!,
+    ),
     home: ListenableBuilder(
       listenable: session,
       builder: (context, _) => session.user == null

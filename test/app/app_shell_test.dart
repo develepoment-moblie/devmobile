@@ -81,17 +81,16 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(NovaApp(session: session));
-    expect(find.text('Bienvenue à Nova Paris'), findsOneWidget);
+    expect(find.text('Qui êtes-vous ?'), findsOneWidget);
 
     await tester.tap(find.text('Entrer (mode test)'));
     await tester.pump();
     expect(find.text('Choisissez une personne.'), findsOneWidget);
 
-    await tester.tap(find.byType(DropdownButtonFormField<AppUser>));
+    await tester.tap(find.text('Amina'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Amina · Gouvernante').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Entrer (mode test)'));
+    expect(find.text('Entrer · Amina'), findsOneWidget);
+    await tester.tap(find.text('Entrer · Amina'));
     await tester.pumpAndSettle();
 
     expect(find.text('Bonjour Amina.'), findsOneWidget);
@@ -110,7 +109,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Se déconnecter'));
     await tester.pumpAndSettle();
-    expect(find.text('Bienvenue à Nova Paris'), findsOneWidget);
+    expect(find.text('Qui êtes-vous ?'), findsOneWidget);
   });
 
   testWidgets('each role sees exactly the modules that declare it', (

@@ -29,19 +29,8 @@ class NovaHeader extends StatelessWidget {
               onPressed: onBack,
               icon: const Icon(Icons.arrow_back),
             ),
-          const NovaLogo(),
-          const SizedBox(width: 9),
           const Expanded(
-            child: Text(
-              'NOVA PARIS',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1,
-              ),
-            ),
+            child: Align(alignment: Alignment.centerLeft, child: NovaBrand()),
           ),
           IconButton(
             onPressed: onNotifications,
@@ -89,23 +78,28 @@ class StaffBanner extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) => Container(
-    constraints: const BoxConstraints(minHeight: 88),
-    padding: const EdgeInsets.all(17),
+    constraints: const BoxConstraints(minHeight: 96),
+    padding: const EdgeInsets.all(18),
     decoration: BoxDecoration(
-      color: AppColors.primary,
-      borderRadius: BorderRadius.circular(18),
+      gradient: AppGradients.hero,
+      borderRadius: BorderRadius.circular(22),
+      boxShadow: AppShadows.soft,
+    ),
+    foregroundDecoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(22),
+      border: Border.all(color: AppColors.gold.withValues(alpha: .18)),
     ),
     child: Row(
       children: [
         Container(
-          width: 43,
-          height: 43,
+          width: 46,
+          height: 46,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: .14),
-            borderRadius: BorderRadius.circular(13),
+            color: Colors.white.withValues(alpha: .12),
+            borderRadius: BorderRadius.circular(14),
           ),
-          child: const NovaIcon(NovaSymbol.spark, color: Colors.white),
+          child: const NovaIcon(NovaSymbol.spark, color: AppColors.gold),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -114,15 +108,21 @@ class StaffBanner extends StatelessWidget {
             children: [
               Text(
                 label,
-                style: const TextStyle(color: Colors.white, fontSize: 7),
+                style: TextStyle(
+                  color: AppColors.gold.withValues(alpha: .95),
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
               ),
-              const SizedBox(height: 7),
+              const SizedBox(height: 6),
               Text(
                 title,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 18,
-                  height: 1.5,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  height: 1.3,
                 ),
               ),
             ],

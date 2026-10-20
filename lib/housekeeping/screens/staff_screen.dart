@@ -82,7 +82,9 @@ class StaffScreen extends StatelessWidget {
       const SizedBox(height: 12),
       ListTile(
         contentPadding: EdgeInsets.zero,
-        title: Text('${data.reviews} nettoyages à valider'),
+        title: Text(
+          '${data.reviews} nettoyage${data.reviews > 1 ? 's' : ''} à valider',
+        ),
         subtitle: const Text('Contrôle de la gouvernante'),
         trailing: const Icon(Icons.chevron_right),
         onTap: onHousekeeping,
