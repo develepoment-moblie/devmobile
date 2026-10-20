@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
-import '../../shared/services/app_exception.dart';
+import '../services/app_exception.dart';
 import '../services/housekeeping_backend.dart';
 import 'room.dart';
 import 'supply.dart';
@@ -457,6 +457,19 @@ class HotelData extends ChangeNotifier {
     room.approvedBy = currentUser;
     changed();
   }
+
+  /// The supervisor or the assigned agent reports a problem to maintenance.
+  bool canReport(Room room) =>
+      isConnected &&
+      room.status != RoomStatus.maintenance &&
+      (isSupervisor || canClean(room));
+
+  Future<void> reportProblem(Room room, String description, bool urgent) =>
+      _remote('/v1/rooms/${room.number}/report', {
+        'version': room.version,
+        'description': description,
+        'urgent': urgent,
+      });
 
   FutureOr<void> checkout(Room room) {
     if (api != null) {

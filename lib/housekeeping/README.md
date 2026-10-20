@@ -1,48 +1,63 @@
-# Module chambres et ménage
+# Module Chambres et ménage
 
-Ce dossier possède le travail de gestion des chambres et du ménage, comme
-`user_management/` possède le module utilisateur.
+Responsable : **jassernoomani** · Dossier : `lib/housekeeping/` · Tests : `test/housekeeping/`
+
+Statut des chambres, attribution, validation, linge et produits.
+
+## Fonctionnalités (cahier des charges)
+
+- [x] Statut des chambres (libre, occupée, à nettoyer, maintenance)
+- [x] Attribution des tâches aux agents par la gouvernante
+- [x] Notification au départ du client (événement `GuestCheckedOut` des Réservations)
+- [x] Validation du nettoyage par la gouvernante, avec une photo par tâche
+- [x] Linge et produits d’entretien (mouvements de stock)
+- [x] Catalogue des chambres pour le Manager (création, catégorie, archive, restauration)
+- [x] Signalement d’un problème à la Maintenance depuis la fiche chambre
+
+## Qui voit quoi
+
+| Rôle | Écran |
+|---|---|
+| Agent d’étage | Mon service, Mes chambres : uniquement ses attributions |
+| Gouvernante | Accueil, Départs, Chambres, Stock, Ménage (validation) |
+| Manager / Admin | Catalogue des chambres |
+
+Seule la gouvernante attribue, valide et gère le stock. Un agent ne modifie que
+les chambres qui lui sont attribuées. Le Manager ne nettoie pas et ne touche pas
+au stock. Ces règles sont locales (`services/sqlite_housekeeping.dart`).
+
+## Avec les autres modules
+
+| Événement | Effet ici |
+|---|---|
+| `GuestCheckedIn` reçu | chambre occupée |
+| `GuestCheckedOut` reçu | chambre à nettoyer + notification « Départ client » |
+| `MaintenanceRequested` reçu | chambre en maintenance (sauf si occupée) |
+| `MaintenanceResolved` reçu | chambre à nettoyer après l’intervention |
+| `RoomReady` émis | à la validation du nettoyage |
+| `MaintenanceRequested` émis | « Signaler un problème » sur la fiche chambre |
+
+La liste des agents vient de `session.staff` (module Utilisateurs).
+
+## Structure
 
 ```text
-housekeeping/
-  housekeeping.dart           API publique du module
-  models/
-    hotel_data.dart           État et actions du ménage
-    room.dart
-    supply.dart
-  custom/
-    roomcard.dart
-    stock_movement_dialog.dart
-  screens/
-    housekeeping_screen.dart
-    rooms_screen.dart
-    details_screen.dart
-    assign_task_screen.dart
-    supplies_screen.dart
-    notifications_screen.dart
-    staff_screen.dart
-    manage_rooms_screen.dart  Catalogue du Manager et formulaire de chambre
-  services/
-    housekeeping_backend.dart Contrat de stockage
-    sqlite_housekeeping.dart   Adaptateur local SQLite
-    housekeeping_api.dart     Ancien adaptateur HTTP de démonstration
-    room_catalog_backend.dart Contrat du catalogue Manager
-    sqlite_room_catalog.dart  Création, modification et archivage SQLite
+housekeeping_module.dart        point d’entrée : tables, écoute des événements, 1er écran
+models/                         Room, Supply, HotelData (état des écrans), AgentWorkload, TaskSchema
+custom/                         cartes, dialogues (stock, tâche, signalement), en-tête, icônes
+screens/
+  housekeeping_home_screen.dart choix de l’écran selon le rôle
+  housekeeping_workspace.dart   onglets de l’agent et de la gouvernante
+  …                             chambres, fiche, attribution, photo, stock, notifications, catalogue
+services/
+  housekeeping_store.dart       tables SQLite housekeeping_* et transactions
+  sqlite_housekeeping.dart      règles du ménage (attribution, contrôle, validation, stock)
+  sqlite_room_catalog.dart      règles du catalogue Manager
+  hotel_event_handlers.dart     réactions aux événements des autres modules
+  room_rules.dart               petites opérations communes sur une chambre
+  evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
 ```
 
-Les écrans reçoivent `HotelData` depuis l'application. Ce module n'importe ni
-`user_management`, ni `app`, ni `demo`. Les widgets communs, le thème et les erreurs
-de service viennent de `shared/`. Aucun second MaterialApp ni connexion séparée.
-
-Pour intégrer un écran depuis un autre module ou le routeur :
-
-```dart
-import 'package:nova_paris/housekeeping/housekeeping.dart';
-
-// Après chargement de HotelData avec la session partagée :
-HousekeepingScreen(data: hotelData);
-```
-
-`lib/housekeeping.dart` reste une entrée de compatibilité. Les adaptateurs SQLite
-utilisent le contrat partagé LocalSessionStore ; les écrans gardent les mêmes
-interfaces et les règles métier. Voir ../../docs/SQLITE.md.
+Tables : `housekeeping_rooms`, `housekeeping_photos`, `housekeeping_supplies`,
+`housekeeping_notifications`, `housekeeping_notification_reads` (version 1).
+Une nouvelle installation reçoit des chambres et un stock fictifs.

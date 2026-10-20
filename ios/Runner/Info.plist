@@ -66,9 +66,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-    <key>NSCameraUsageDescription</key>
-    <string>Prendre une photo du résultat d’une tâche de ménage.</string>
-    <key>NSPhotoLibraryUsageDescription</key>
-    <string>Choisir une photo justificative pour une tâche de ménage.</string>
 </dict>
 </plist>

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../shared/custom/app_theme.dart';
-import '../../shared/custom/app_widgets.dart';
-import '../../shared/custom/nova_icon.dart';
+import '../custom/housekeeping_widgets.dart';
+import '../custom/nova_icon.dart';
 import '../custom/roomcard.dart';
 import '../models/hotel_data.dart';
 import '../models/room.dart';

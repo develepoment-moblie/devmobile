@@ -1,9 +1,8 @@
-
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../../shared/services/evidence_photo.dart';
-import '../../shared/services/app_exception.dart';
+import 'evidence_photo.dart';
+import 'app_exception.dart';
 
 abstract interface class TaskPhotoPicker {
   Future<Uint8List?> pick({required bool camera});

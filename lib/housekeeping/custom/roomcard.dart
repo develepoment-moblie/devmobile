@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/room.dart';
 import '../../shared/custom/app_theme.dart';
-import '../../shared/custom/nova_icon.dart';
+import 'nova_icon.dart';
 
 (Color, Color) roomTone(Room room, {bool cleaning = true}) {
   if (!cleaning) {

@@ -1,4 +1,4 @@
-import '../../shared/services/task_schema.dart';
+import 'task_schema.dart';
 
 enum RoomStatus { ready, occupied, dirty, maintenance }
 

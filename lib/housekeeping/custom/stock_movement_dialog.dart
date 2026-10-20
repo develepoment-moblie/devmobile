@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../models/hotel_data.dart';
 import '../models/supply.dart';
-import '../../shared/services/app_exception.dart';
-import '../../shared/custom/draft_guard.dart';
+import '../services/app_exception.dart';
+import 'draft_guard.dart';
 
 class StockMovementDialog extends StatefulWidget {
   final HotelData data;

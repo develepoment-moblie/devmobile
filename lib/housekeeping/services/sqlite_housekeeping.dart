@@ -1,16 +1,22 @@
-import '../../shared/services/local_session_store.dart';
-import '../../shared/services/local_attachment_store.dart';
-import '../../shared/services/evidence_photo.dart';
-import '../../shared/services/task_schema.dart';
+import 'local_session_store.dart';
+import 'local_attachment_store.dart';
+import 'evidence_photo.dart';
+import '../models/task_schema.dart';
 
 import 'dart:convert';
 import 'dart:math';
 
+import '../../shared/services/app_events.dart';
 import 'housekeeping_backend.dart';
+import 'housekeeping_store.dart';
+import 'room_rules.dart';
 
 class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
   final LocalSessionStore store;
-  SqliteHousekeeping(this.store);
+
+  /// Where approvals and problem reports are announced to the other modules.
+  final AppEvents? events;
+  SqliteHousekeeping(this.store, {this.events});
   Map<String, dynamic> _principal(Map<String, dynamic> state) {
     final actor = store.actor(state);
     if (!['staff', 'supervisor'].contains(actor['role'])) {
@@ -54,7 +60,24 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
   }
 
   @override
-  Future<void> mutate(String path, Map<String, dynamic> body) => store.change((
+  Future<void> mutate(String path, Map<String, dynamic> body) async {
+    await _apply(path, body);
+    final parts = path.split('/');
+    if (parts.length != 5) return;
+    if (parts[4] == 'approve') events?.emit(RoomReady(parts[3]));
+    if (parts[4] == 'report') {
+      if (store case final HousekeepingStore own) own.markOwnReport(parts[3]);
+      events?.emit(
+        MaintenanceRequested(
+          parts[3],
+          description: (body['description'] as String).trim(),
+          urgent: body['urgent'] as bool,
+        ),
+      );
+    }
+  }
+
+  Future<void> _apply(String path, Map<String, dynamic> body) => store.change((
     s,
   ) {
     final actor = _principal(s);
@@ -165,6 +188,43 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
         (row['history'] as List).add(
           '${actor['name']} · Tâche ajoutée : ${(label).trim()}',
         );
+        return;
+      }
+      if (action == 'report') {
+        final description = body['description'];
+        require(
+          description is String &&
+              description.trim().isNotEmpty &&
+              description.trim().length <= 300,
+          'Décrivez le problème en 300 caractères maximum.',
+        );
+        require(body['urgent'] is bool, 'Signalement invalide.');
+        require(
+          supervisor || row['employeeId'] == actor['id'],
+          'Cette chambre ne vous est pas attribuée.',
+          403,
+        );
+        require(
+          row['status'] != 'maintenance',
+          'Cette chambre est déjà en maintenance.',
+          409,
+        );
+        final text = (description as String).trim();
+        // An occupied room stays occupied: the guest is still there.
+        if (row['status'] != 'occupied') {
+          row['status'] = 'maintenance';
+          resetCleaning(row);
+          row['note'] = text;
+        }
+        addHistory(row, '${actor['name']} · Problème signalé : $text');
+        addNotification(
+          s,
+          title: body['urgent'] == true ? 'Maintenance urgente' : 'Maintenance',
+          message: 'Chambre ${parts[3]} : $text',
+          roomNumber: parts[3],
+          audience: 'supervisor',
+        );
+        bumpVersion(row);
         return;
       }
       require(

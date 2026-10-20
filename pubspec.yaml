@@ -1,25 +1,25 @@
 name: nova_paris
-description: "Nova Paris — utilisateurs, chambres et ménage."
+description: "Nova Paris - application de gestion hôtelière (projet d'équipe)."
 publish_to: 'none'
 version: 0.1.0+1
 
 environment:
   sdk: ^3.13.3
 
+# Shared dependencies. Add a package only when your module needs it, and say so
+# in your pull request: pubspec.yaml is shared by the whole team.
 dependencies:
   flutter:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
-  cupertino_icons: ^2.0.0
-  http: ^1.6.0
-  shared_preferences: ^2.5.6
-  pointycastle: ^4.0.0
+  cupertino_icons: ^1.0.8
   sqflite: ^2.4.4+2
   path: ^1.9.1
-  file_picker: ^13.1.0
+  # housekeeping: task photos (camera/gallery, JPEG normalisation, photo ids)
   image_picker: ^1.2.4
   image: ^4.12.0
+  pointycastle: ^4.0.0
 
 dev_dependencies:
   flutter_test:

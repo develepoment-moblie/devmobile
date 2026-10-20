@@ -3,15 +3,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../shared/custom/app_theme.dart';
-import '../../shared/custom/app_widgets.dart';
-import '../../shared/custom/nova_icon.dart';
+import '../custom/housekeeping_widgets.dart';
+import '../custom/nova_icon.dart';
 import '../custom/roomcard.dart';
 import '../models/hotel_data.dart';
 import '../models/room.dart';
 import 'assign_task_screen.dart';
 import 'task_photo_screen.dart';
 import '../custom/add_room_task_dialog.dart';
-import '../../shared/custom/draft_guard.dart';
+import '../custom/draft_guard.dart';
+import '../custom/report_problem_dialog.dart';
 
 class DetailsScreen extends StatefulWidget {
   final HotelData data;
@@ -94,6 +95,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
     if (!mounted) return;
     setState(() {});
     if (result != null) showFeedback(context, result);
+  }
+
+  Future<void> report() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => ReportProblemDialog(data: widget.data, room: widget.room),
+    );
+    if (mounted && saved == true) {
+      showFeedback(context, 'Problème signalé à la maintenance');
+    }
   }
 
   Future<void> action(FutureOr<void> Function() update, String message) async {
@@ -357,25 +368,22 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 'Chambre prête',
                 'Le nettoyage a été validé. La chambre est disponible.',
               ),
-            if (room.status == RoomStatus.occupied && !data.isConnected) ...[
-              NovaButton(
-                'Enregistrer le départ',
-                symbol: NovaSymbol.check,
-                onPressed: () => action(
-                  () => data.checkout(room),
-                  'Départ enregistré · notification ajoutée',
-                ),
-              ),
-              const SizedBox(height: 8),
+            if (room.status == RoomStatus.occupied)
               const Text(
-                'Le départ ajoute la chambre au ménage et crée une notification locale.',
-                style: TextStyle(color: AppColors.muted, fontSize: 11),
+                'Chambre occupée. Le départ du client, enregistré par la réception, la remettra au ménage.',
               ),
-            ],
             if (room.status == RoomStatus.maintenance)
               const Text(
                 'Chambre indisponible pendant l’intervention de maintenance.',
               ),
+            if (data.canReport(room)) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: saving ? null : report,
+                icon: const Icon(Icons.build_outlined, size: 18),
+                label: const Text('Signaler un problème'),
+              ),
+            ],
             const SizedBox(height: 28),
             const Text(
               'Historique',

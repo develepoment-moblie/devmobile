@@ -1,5 +1,5 @@
-import '../../shared/services/local_session_store.dart';
-import '../../shared/services/task_schema.dart';
+import 'local_session_store.dart';
+import '../models/task_schema.dart';
 import 'room_catalog_backend.dart';
 
 class SqliteRoomCatalog implements RoomCatalogBackend {

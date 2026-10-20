@@ -1,11 +1,11 @@
 {
-    "name": "Nova Paris",
-    "short_name": "Nova Paris",
+    "name": "nova_paris",
+    "short_name": "nova_paris",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#F7F3EA",
-    "theme_color": "#183C35",
-    "description": "Gestion des utilisateurs, des chambres et du ménage",
+    "background_color": "#0175C2",
+    "theme_color": "#0175C2",
+    "description": "Nova Paris - application de gestion hotelière (projet d'équipe).",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

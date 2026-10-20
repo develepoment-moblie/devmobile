@@ -47,9 +47,6 @@ app.*.map.json
 # Widget Preview related
 .widget_preview/
 
-# Server data and private development identities
-/backend/data/
-/backend/.dev/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
