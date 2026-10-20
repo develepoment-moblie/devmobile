@@ -6,18 +6,58 @@ Statut des chambres, attribution, validation, linge et produits.
 
 ## Fonctionnalités (cahier des charges)
 
-- [ ] Statut des chambres
-- [ ] Attribution des tâches
-- [ ] Notification au départ du client
-- [ ] Validation par la gouvernante
-- [ ] Linge et produits d’entretien
+- [x] Statut des chambres (libre, occupée, à nettoyer, maintenance)
+- [x] Attribution des tâches aux agents par la gouvernante
+- [x] Notification au départ du client (événement `GuestCheckedOut` des Réservations)
+- [x] Validation du nettoyage par la gouvernante, avec une photo par tâche
+- [x] Linge et produits d’entretien (mouvements de stock)
+- [x] Catalogue des chambres pour le Manager (création, catégorie, archive, restauration)
+- [x] Signalement d’un problème à la Maintenance depuis la fiche chambre
+
+## Qui voit quoi
+
+| Rôle | Écran |
+|---|---|
+| Agent d’étage | Mon service, Mes chambres : uniquement ses attributions |
+| Gouvernante | Accueil, Départs, Chambres, Stock, Ménage (validation) |
+| Manager / Admin | Catalogue des chambres |
+
+Seule la gouvernante attribue, valide et gère le stock. Un agent ne modifie que
+les chambres qui lui sont attribuées. Le Manager ne nettoie pas et ne touche pas
+au stock. Ces règles sont locales (`services/sqlite_housekeeping.dart`).
+
+## Avec les autres modules
+
+| Événement | Effet ici |
+|---|---|
+| `GuestCheckedIn` reçu | chambre occupée |
+| `GuestCheckedOut` reçu | chambre à nettoyer + notification « Départ client » |
+| `MaintenanceRequested` reçu | chambre en maintenance (sauf si occupée) |
+| `MaintenanceResolved` reçu | chambre à nettoyer après l’intervention |
+| `RoomReady` émis | à la validation du nettoyage |
+| `MaintenanceRequested` émis | « Signaler un problème » sur la fiche chambre |
+
+La liste des agents vient de `session.staff` (module Utilisateurs).
 
 ## Structure
 
-- `housekeeping_module.dart` : point d’entrée (titre, rôles, tables, premier écran).
-- `models/` : classes de données.
-- `custom/` : widgets réutilisables du module.
-- `screens/` : écrans. `housekeeping_home_screen.dart` est le premier écran.
-- `services/` : accès à la base SQLite et logique métier.
+```text
+housekeeping_module.dart        point d’entrée : tables, écoute des événements, 1er écran
+models/                         Room, Supply, HotelData (état des écrans), AgentWorkload, TaskSchema
+custom/                         cartes, dialogues (stock, tâche, signalement), en-tête, icônes
+screens/
+  housekeeping_home_screen.dart choix de l’écran selon le rôle
+  housekeeping_workspace.dart   onglets de l’agent et de la gouvernante
+  …                             chambres, fiche, attribution, photo, stock, notifications, catalogue
+services/
+  housekeeping_store.dart       tables SQLite housekeeping_* et transactions
+  sqlite_housekeeping.dart      règles du ménage (attribution, contrôle, validation, stock)
+  sqlite_room_catalog.dart      règles du catalogue Manager
+  hotel_event_handlers.dart     réactions aux événements des autres modules
+  room_rules.dart               petites opérations communes sur une chambre
+  evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
+```
 
-Tables SQLite : préfixe obligatoire `housekeeping_` (voir CONTRIBUTING.md).
+Tables : `housekeeping_rooms`, `housekeeping_photos`, `housekeeping_supplies`,
+`housekeeping_notifications`, `housekeeping_notification_reads` (version 1).
+Une nouvelle installation reçoit des chambres et un stock fictifs.

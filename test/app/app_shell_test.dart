@@ -100,7 +100,7 @@ void main() {
     expect(find.text('Facturation et rapports'), findsNothing);
     expect(find.text('Utilisateurs'), findsNothing);
 
-    await tester.tap(find.text('Chambres et ménage'));
+    await tester.tap(find.text('Maintenance'));
     await tester.pumpAndSettle();
     expect(find.text('Module en construction'), findsOneWidget);
     await tester.tap(find.byType(BackButton));
