@@ -129,6 +129,54 @@ void main() {
     expect(state.containsKey('users'), isFalse);
   });
 
+  test(
+    'the empty-hotel build option starts with nothing; the admin adds rooms',
+    () async {
+      final empty = housekeepingSeedState(samples: false);
+      for (final key in [
+        'rooms',
+        'roomArchives',
+        'supplies',
+        'notifications',
+      ]) {
+        expect(empty[key], isEmpty, reason: key);
+      }
+      await session.database.close();
+      final database = await AppDatabase.open(
+        schemas: [
+          ModuleSchema(
+            module: 'housekeeping',
+            version: 1,
+            migrate: (tx, from, to) async {
+              await housekeepingSchema.migrate(tx, from, to);
+              for (final table in [
+                'housekeeping_notifications',
+                'housekeeping_supplies',
+                'housekeeping_rooms',
+              ]) {
+                await tx.delete(table);
+              }
+            },
+          ),
+        ],
+        factory: databaseFactoryFfi,
+        path: p.join(directory.path, 'empty.db'),
+      );
+      session = AppSession(database: database, staff: TestStaff());
+      store = HousekeepingStore(session);
+      catalog = SqliteRoomCatalog(store);
+      session.signIn(
+        const AppUser(id: 'admin', fullName: 'Admin', role: AppRole.admin),
+      );
+      expect((await catalog.snapshot()).rooms, isEmpty);
+      await catalog.mutate(RoomCatalogAction.create, {
+        'number': '101',
+        'category': 'Chambre Deluxe',
+      });
+      expect((await catalog.snapshot()).rooms.single.number, '101');
+    },
+  );
+
   test('full cleaning cycle persists and announces the ready room', () async {
     login('amina');
     await action(

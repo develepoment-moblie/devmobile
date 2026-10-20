@@ -51,8 +51,26 @@ final housekeepingSchema = ModuleSchema(
   },
 );
 
+/// Build option: `--dart-define=HOUSEKEEPING_SAMPLE_DATA=false` starts a new
+/// install with an empty hotel (no rooms, stock or notifications).
+const housekeepingSampleData = bool.fromEnvironment(
+  'HOUSEKEEPING_SAMPLE_DATA',
+  defaultValue: true,
+);
+
 /// The fictional rooms, stock and notifications of a new install.
-Map<String, dynamic> housekeepingSeedState() {
+Map<String, dynamic> housekeepingSeedState({
+  bool samples = housekeepingSampleData,
+}) {
+  if (!samples) {
+    return {
+      'rooms': <dynamic>[],
+      'roomArchives': <dynamic>[],
+      'supplies': <dynamic>[],
+      'notifications': <dynamic>[],
+      'reads': <String, dynamic>{},
+    };
+  }
   final seed = jsonDecode(housekeepingSeedJson) as Map<String, dynamic>;
   for (final room in seed['rooms'] as List) {
     TaskSchema.ensure(room as Map<String, dynamic>);
