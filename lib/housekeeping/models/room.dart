@@ -52,8 +52,7 @@ class Room {
       (status == RoomStatus.ready && cleaning == CleaningStatus.completed) ||
       (status == RoomStatus.dirty &&
           cleaning == CleaningStatus.waiting &&
-          employeeId == null &&
-          employee == null);
+          employeeId == null);
   factory Room.fromMap(Map<String, dynamic> map) {
     final room = Room(
       map['number'] as String,

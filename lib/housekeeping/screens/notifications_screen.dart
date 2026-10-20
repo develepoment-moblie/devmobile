@@ -114,9 +114,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           n.message,
                           style: const TextStyle(fontSize: 11),
                         ),
-                        trailing: const Icon(Icons.chevron_right),
+                        // Stock alerts are not about a room: nothing to open.
+                        trailing: n.roomNumber.isEmpty
+                            ? null
+                            : const Icon(Icons.chevron_right),
                         onTap: () async {
                           if (!await read([n]) || !context.mounted) return;
+                          if (n.roomNumber.isEmpty) return;
                           final room = widget.data.rooms
                               .where((r) => r.number == n.roomNumber)
                               .firstOrNull;

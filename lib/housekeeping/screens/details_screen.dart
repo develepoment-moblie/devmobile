@@ -178,9 +178,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
             ),
             const SizedBox(height: 20),
             Text(
-              room.employee == null
+              room.employeeId == null
                   ? 'Aucun agent attribué'
-                  : 'Agent d’étage · ${room.employee}',
+                  : 'Agent d’étage · ${room.employee ?? 'Agent indisponible'}',
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
             if (room.note.isNotEmpty) ...[
@@ -293,7 +293,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                   (room.cleaning == CleaningStatus.waiting ||
                       room.cleaning == CleaningStatus.inProgress))
                 NovaButton(
-                  room.employee == null
+                  room.employeeId == null
                       ? 'Attribuer une tâche'
                       : 'Modifier l’attribution',
                   symbol: NovaSymbol.person,
@@ -304,7 +304,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 const SizedBox(height: 12),
                 OutlinedButton(
                   onPressed:
-                      saving || !data.canClean(room) || room.employee == null
+                      saving || !data.canClean(room) || room.employeeId == null
                       ? null
                       : () => action(
                           () => data.startCleaning(room),
@@ -312,7 +312,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         ),
                   child: const Text('Commencer le nettoyage'),
                 ),
-                if (room.employee == null)
+                if (room.employeeId == null)
                   const Text(
                     'Attribuez un agent avant de commencer.',
                     style: TextStyle(fontSize: 11, color: AppColors.muted),

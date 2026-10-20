@@ -46,25 +46,30 @@ final housekeepingSchema = ModuleSchema(
         notification TEXT NOT NULL
           REFERENCES housekeeping_notifications(id) ON DELETE CASCADE,
         PRIMARY KEY(actor, notification))''');
-      final seed = jsonDecode(housekeepingSeedJson) as Map<String, dynamic>;
-      for (final room in seed['rooms'] as List) {
-        TaskSchema.ensure(room as Map<String, dynamic>);
-        // Sample rooms have no photo evidence, so nothing awaits approval.
-        if (room['status'] == 'dirty') {
-          room['checklist'] = List.filled(4, false);
-          if (room['cleaning'] == 'review') room['cleaning'] = 'waiting';
-        }
-      }
-      await HousekeepingStore._write(tx, {
-        'rooms': seed['rooms'],
-        'roomArchives': <dynamic>[],
-        'supplies': seed['supplies'],
-        'notifications': seed['notifications'],
-        'reads': <String, dynamic>{},
-      });
+      await HousekeepingStore._write(tx, housekeepingSeedState());
     }
   },
 );
+
+/// The fictional rooms, stock and notifications of a new install.
+Map<String, dynamic> housekeepingSeedState() {
+  final seed = jsonDecode(housekeepingSeedJson) as Map<String, dynamic>;
+  for (final room in seed['rooms'] as List) {
+    TaskSchema.ensure(room as Map<String, dynamic>);
+    // Sample rooms have no photo evidence, so nothing awaits approval.
+    if (room['status'] == 'dirty') {
+      room['checklist'] = List.filled(4, false);
+      if (room['cleaning'] == 'review') room['cleaning'] = 'waiting';
+    }
+  }
+  return {
+    'rooms': seed['rooms'],
+    'roomArchives': <dynamic>[],
+    'supplies': seed['supplies'],
+    'notifications': seed['notifications'],
+    'reads': <String, dynamic>{},
+  };
+}
 
 /// Reads and writes the housekeeping tables for the signed-in user.
 /// Every change runs in one SQLite transaction: an error leaves no partial write.

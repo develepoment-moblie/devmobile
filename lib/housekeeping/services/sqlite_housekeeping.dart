@@ -133,12 +133,26 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
             delta.abs() <= 100000,
         'Quantité invalide.',
       );
-      final quantity = (row['quantity'] as int) + (delta as int);
+      final previous = row['quantity'] as int;
+      final quantity = previous + (delta as int);
       require(
         quantity >= 0 && quantity <= 1000000,
         'Stock insuffisant ou quantité trop élevée.',
       );
       row['quantity'] = quantity;
+      // Alert once, when the stock falls to its minimum or below.
+      final minimum = row['minimum'] as int;
+      if (previous > minimum && quantity <= minimum) {
+        addNotification(
+          s,
+          title: quantity == 0 ? 'Rupture de stock' : 'Stock bas',
+          message: quantity == 0
+              ? '${row['name']} : stock épuisé (minimum $minimum). Pensez à réapprovisionner.'
+              : '${row['name']} : il reste $quantity ${row['unit']} (minimum $minimum). Pensez à réapprovisionner.',
+          roomNumber: '',
+          audience: 'supervisor',
+        );
+      }
     } else {
       if (action == 'add-task') {
         require(supervisor, 'Ajout de tâches réservé à la gouvernante.', 403);
@@ -366,7 +380,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     }
     final attachments = store;
     if (attachments is! LocalAttachmentStore) {
-      store.fail('Photos indisponibles dans cette démonstration.');
+      store.fail('Photos indisponibles.');
     }
     return (attachments as LocalAttachmentStore).readAttachment(
       task['photoId'] as String,

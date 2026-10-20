@@ -304,6 +304,48 @@ void main() {
     expect(supplies.firstWhere((s) => s['id'] == 'cleaner')['quantity'], 10);
   });
 
+  test('low stock alerts the supervisor once each time an item crosses its minimum', () async {
+    login('amina');
+    Future<void> move(String id, int delta) async {
+      final supplies = (await store.readState())['supplies'] as List;
+      final s = supplies.firstWhere((s) => s['id'] == id);
+      await backend.mutate('/v1/supplies/$id/movement', {
+        'version': s['version'],
+        'delta': delta,
+      });
+    }
+
+    Future<List<String>> alerts() async => [
+      for (final n in (await backend.snapshot())['notifications'] as List)
+        if ('${n['title']}'.contains('tock')) '${n['title']} | ${n['message']}',
+    ];
+
+    // Draps propres: 42, minimum 15.
+    await move('sheets', -20);
+    expect(await alerts(), isEmpty);
+    await move('sheets', -7);
+    expect(await alerts(), [
+      'Stock bas | Draps propres : il reste 15 pièces (minimum 15). Pensez à réapprovisionner.',
+    ]);
+    await move('sheets', -5);
+    expect(await alerts(), hasLength(1), reason: 'already below the minimum');
+    await move('sheets', 30);
+    await move('sheets', -40);
+    final all = await alerts();
+    expect(all, hasLength(2));
+    expect(
+      all.first,
+      startsWith('Rupture de stock | Draps propres : stock épuisé'),
+    );
+    final notes = (await backend.snapshot())['notifications'] as List;
+    expect(notes.first['roomNumber'], '');
+    expect(notes.first['audience'], 'supervisor');
+
+    login('sarah');
+    final forAgent = (await backend.snapshot())['notifications'] as List;
+    expect(forAgent.any((n) => '${n['title']}'.contains('tock')), isFalse);
+  });
+
   test('notification reads belong to each user', () async {
     login('amina');
     final ids = [

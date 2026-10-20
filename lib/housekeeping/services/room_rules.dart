@@ -31,7 +31,7 @@ void addNotification(
   String audience = 'all',
 }) => (state['notifications'] as List).insert(0, {
   'id':
-      '$roomNumber-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}',
+      '${roomNumber.isEmpty ? 'stock' : roomNumber}-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}',
   'title': title,
   'message': message,
   'roomNumber': roomNumber,
