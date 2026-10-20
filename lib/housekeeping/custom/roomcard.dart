@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/room.dart';
+import '../../shared/custom/animations.dart';
 import '../../shared/custom/app_theme.dart';
 import 'nova_icon.dart';
 
@@ -35,12 +36,13 @@ class StatusBadge extends StatelessWidget {
     super.key,
     required this.color,
     required this.background,
-    this.fontSize = 7,
+    this.fontSize = 11.5,
     this.textColor,
   });
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+  Widget build(BuildContext context) => AnimatedContainer(
+    duration: const Duration(milliseconds: 300),
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
     decoration: BoxDecoration(
       color: background,
       borderRadius: BorderRadius.circular(20),
@@ -49,11 +51,11 @@ class StatusBadge extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 4,
-          height: 4,
+          width: 6,
+          height: 6,
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
-        const SizedBox(width: 4),
+        const SizedBox(width: 5),
         Text(
           label,
           style: TextStyle(
@@ -84,37 +86,39 @@ class Roomcard extends StatelessWidget {
       button: true,
       label:
           'Chambre ${room.number}, ${cleaning ? room.cleaningLabel : room.statusLabel}',
-      child: Material(
-        color: Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: const BorderSide(color: AppColors.border),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.border),
+          boxShadow: AppShadows.soft,
         ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
+        child: PressableScale(
           onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             child: Row(
               children: [
-                Container(
-                  width: 47,
-                  height: 47,
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  width: 52,
+                  height: 52,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: background,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(15),
                   ),
                   child: Text(
                     room.number,
                     style: TextStyle(
                       color: color,
-                      fontSize: 11,
+                      fontSize: 15,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -122,30 +126,32 @@ class Roomcard extends StatelessWidget {
                       Text(
                         'Chambre ${room.number}',
                         style: const TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 2),
                       Text(
                         cleaning
                             ? room.subtitle
                             : '${room.category} · Étage ${room.floor}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontSize: 7,
+                          fontSize: 12.5,
                           color: AppColors.muted,
                         ),
+                      ),
+                      const SizedBox(height: 8),
+                      StatusBadge(
+                        cleaning ? room.cleaningLabel : room.statusLabel,
+                        color: color,
+                        background: background,
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 6),
-                StatusBadge(
-                  cleaning ? room.cleaningLabel : room.statusLabel,
-                  color: color,
-                  background: background,
-                ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 const NovaIcon(NovaSymbol.chevron),
               ],
             ),

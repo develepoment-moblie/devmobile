@@ -21,7 +21,9 @@ class ModuleSchema {
   });
 }
 
-// The single local database shared by all modules (nova_paris.db).
+// The single local database shared by all modules (nova_paris_hotel.db).
+// The name differs from the earlier single-team app's nova_paris.db, so a
+// phone upgraded from it keeps that old data untouched.
 class AppDatabase {
   final Database database;
   AppDatabase._(this.database);
@@ -33,7 +35,7 @@ class AppDatabase {
   }) async {
     final driver = factory ?? databaseFactory;
     final location =
-        path ?? p.join(await driver.getDatabasesPath(), 'nova_paris.db');
+        path ?? p.join(await driver.getDatabasesPath(), 'nova_paris_hotel.db');
     final db = await driver.openDatabase(
       location,
       options: OpenDatabaseOptions(

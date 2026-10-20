@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/custom/animations.dart';
 import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../custom/nova_icon.dart';
@@ -59,7 +60,10 @@ class _HousekeepingScreenState extends State<HousekeepingScreen> {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 7, 18, 24),
       children: [
-        StaffBanner(title: '${data.remaining} chambres restantes'),
+        StaffBanner(
+          title:
+              '${data.remaining} chambre${data.remaining > 1 ? 's' : ''} restante${data.remaining > 1 ? 's' : ''}',
+        ),
         const SizedBox(height: 16),
         Container(
           padding: const EdgeInsets.all(4),
@@ -73,31 +77,39 @@ class _HousekeepingScreenState extends State<HousekeepingScreen> {
               (index) => Expanded(
                 child: Semantics(
                   selected: selected == index,
-                  child: TextButton(
-                    onPressed: () => setState(
-                      () => selected = selected == index ? null : index,
-                    ),
-                    style: TextButton.styleFrom(
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      minimumSize: const Size(0, 37),
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      backgroundColor: selected == index
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOut,
+                    decoration: BoxDecoration(
+                      color: selected == index
                           ? Colors.white
                           : Colors.transparent,
-                      foregroundColor: selected == index
-                          ? AppColors.primary
-                          : AppColors.muted,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
+                      borderRadius: BorderRadius.circular(11),
+                      boxShadow: selected == index ? AppShadows.soft : const [],
                     ),
-                    child: Text(
-                      labels[index],
-                      style: TextStyle(
-                        fontSize: 8,
-                        fontWeight: selected == index
-                            ? FontWeight.w700
-                            : FontWeight.w400,
+                    child: TextButton(
+                      onPressed: () => setState(
+                        () => selected = selected == index ? null : index,
+                      ),
+                      style: TextButton.styleFrom(
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        minimumSize: const Size(0, 42),
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        foregroundColor: selected == index
+                            ? AppColors.primary
+                            : AppColors.muted,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      child: Text(
+                        labels[index],
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: selected == index
+                              ? FontWeight.w800
+                              : FontWeight.w500,
+                        ),
                       ),
                     ),
                   ),
@@ -112,12 +124,15 @@ class _HousekeepingScreenState extends State<HousekeepingScreen> {
             'Aucune tâche',
             'Choisissez un autre statut pour consulter les chambres.',
           ),
-        ...rooms.map(
-          (room) => Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Roomcard(room: room, onTap: () => openRoom(room)),
+        for (final (i, room) in rooms.indexed)
+          FadeSlideIn(
+            key: ValueKey('$selected-${room.number}'),
+            index: i,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Roomcard(room: room, onTap: () => openRoom(room)),
+            ),
           ),
-        ),
         const SizedBox(height: 3),
         Align(
           alignment: Alignment.centerLeft,

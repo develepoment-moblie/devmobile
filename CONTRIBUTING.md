@@ -48,7 +48,7 @@ void attach(AppSession session) {
 
 ## Base de données : vos propres tables
 
-Une seule base `nova_paris.db`, mais **chaque module a ses tables et son propre
+Une seule base `nova_paris_hotel.db`, mais **chaque module a ses tables et son propre
 numéro de version**. Préfixez toujours vos tables par le nom du module.
 
 ```dart

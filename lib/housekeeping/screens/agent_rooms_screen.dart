@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/custom/animations.dart';
+
 import '../custom/housekeeping_widgets.dart';
 import '../custom/agent_room_card.dart';
 import '../models/agent_workload.dart';
@@ -71,16 +73,20 @@ class _AgentRoomsScreenState extends State<AgentRoomsScreen> {
                   ? 'Vos chambres apparaîtront ici dès leur attribution par la gouvernante. Tirez vers le bas pour actualiser.'
                   : 'Choisissez un autre filtre pour retrouver vos chambres.',
             ),
-          for (final room in rooms)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: AgentRoomCard(
-                room: room,
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute<void>(
-                    builder: (_) =>
-                        DetailsScreen(data: widget.data, room: room),
+          for (final (i, room) in rooms.indexed)
+            FadeSlideIn(
+              key: ValueKey('$selected-${room.number}'),
+              index: i,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: AgentRoomCard(
+                  room: room,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          DetailsScreen(data: widget.data, room: room),
+                    ),
                   ),
                 ),
               ),
