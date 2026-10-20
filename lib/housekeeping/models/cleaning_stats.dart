@@ -6,6 +6,9 @@ class CleaningRecord {
   final DateTime assignedAt;
   final DateTime? startedAt, submittedAt, approvedAt;
   final int refusals;
+
+  /// Timer duration (pauses excluded), when the timer was used.
+  final int? durationMs;
   const CleaningRecord({
     required this.roomNumber,
     required this.agentId,
@@ -15,6 +18,7 @@ class CleaningRecord {
     this.startedAt,
     this.submittedAt,
     this.approvedAt,
+    this.durationMs,
   });
   static DateTime? _date(Object? v) => v == null ? null : DateTime.parse('$v');
   factory CleaningRecord.fromMap(Map m) => CleaningRecord(
@@ -26,10 +30,14 @@ class CleaningRecord {
     startedAt: _date(m['started_at']),
     submittedAt: _date(m['submitted_at']),
     approvedAt: _date(m['approved_at']),
+    durationMs: m['duration_ms'] as int?,
   );
 
-  /// Time spent cleaning: start to the last submission.
-  Duration? get duration => startedAt == null || submittedAt == null
+  /// Actual cleaning time: the timer's when available (pauses excluded),
+  /// otherwise from the start to the last submission.
+  Duration? get duration => durationMs != null
+      ? Duration(milliseconds: durationMs!)
+      : startedAt == null || submittedAt == null
       ? null
       : submittedAt!.difference(startedAt!);
 }

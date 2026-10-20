@@ -73,6 +73,8 @@ void main() {
     await tester.tap(find.text('Chambre 101').first);
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('Signaler un problème'), 200);
+    await tester.ensureVisible(find.text('Signaler un problème'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Signaler un problème'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextFormField), 'Fuite sous le lavabo');

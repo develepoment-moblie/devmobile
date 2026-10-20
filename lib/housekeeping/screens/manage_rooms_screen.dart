@@ -9,6 +9,7 @@ import '../custom/housekeeping_widgets.dart';
 import '../custom/roomcard.dart';
 import '../models/catalog_data.dart';
 import '../models/room.dart';
+import '../services/mutation_meta.dart';
 import '../services/room_catalog_backend.dart';
 import 'category_tasks_screen.dart';
 import 'floor_screen.dart';
@@ -475,6 +476,7 @@ class _RoomFormSheetState extends State<RoomFormSheet> {
           'number': number.text.trim(),
           'category': category.text.trim(),
           if (version != null) 'version': version,
+          ...mutationMeta(),
         },
       );
       if (mounted) Navigator.pop(context, true);

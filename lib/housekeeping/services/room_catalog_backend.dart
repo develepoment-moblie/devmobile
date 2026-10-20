@@ -8,6 +8,7 @@ enum RoomCatalogAction {
   restore,
   renameFloor,
   setCategoryTasks,
+  setCategoryEstimate,
 }
 
 /// A category's default task list, applied to its new and idle rooms.
@@ -25,12 +26,16 @@ class RoomCatalogSnapshot {
   final Map<int, String> floorNames;
   final Map<int, int> floorVersions;
   final Map<String, CategoryTasks> categoryTasks;
+
+  /// Estimated cleaning minutes per category, with their versions.
+  final Map<String, ({int minutes, int version})> estimates;
   const RoomCatalogSnapshot(
     this.rooms,
     this.archivedRooms, {
     this.floorNames = const {},
     this.floorVersions = const {},
     this.categoryTasks = const {},
+    this.estimates = const {},
   });
 
   String floorName(int floor) => floorNames[floor] ?? 'Étage $floor';
@@ -44,6 +49,7 @@ class RoomCatalogSnapshot {
     ...rooms.map((r) => r.category),
     ...archivedRooms.map((r) => r.category),
     ...categoryTasks.keys,
+    ...estimates.keys,
   }.toList()..sort();
 
   factory RoomCatalogSnapshot.fromMap(Map<String, dynamic> map) {
@@ -68,6 +74,13 @@ class RoomCatalogSnapshot {
             e.key as String,
             (e.value['tasks'] as List).cast<String>(),
             e.value['version'] as int,
+          ),
+      },
+      estimates: {
+        for (final e in (map['estimates'] as Map? ?? {}).entries)
+          e.key as String: (
+            minutes: e.value['minutes'] as int,
+            version: e.value['version'] as int,
           ),
       },
     );

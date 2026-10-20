@@ -1,11 +1,16 @@
 import '../models/task_schema.dart';
 import 'local_session_store.dart';
+import 'mutation_meta.dart';
 import 'room_catalog_backend.dart';
 
 // The Manager's catalog: rooms, floors and the task list of each category.
+// Every body carries mutationId (UUID v4) and clientTimestamp; a repeated
+// mutationId is ignored.
 class SqliteRoomCatalog implements RoomCatalogBackend {
   final LocalSessionStore store;
-  SqliteRoomCatalog(this.store);
+  final DateTime Function() clock;
+  SqliteRoomCatalog(this.store, {DateTime Function()? clock})
+    : clock = clock ?? DateTime.now;
   void _manager(Map<String, dynamic> state) {
     if (!['manager', 'admin'].contains(store.actor(state)['role'])) {
       store.fail('Action réservée au manager.', 403);
@@ -21,6 +26,7 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
       'archivedRooms': s['roomArchives'] ?? [],
       'floors': s['floors'] ?? [],
       'categoryTasks': s['categoryTasks'] ?? {},
+      'estimates': s['estimates'] ?? {},
     });
   }
 
@@ -63,6 +69,16 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
     Map<String, dynamic> body,
   ) => store.change((s) {
     _manager(s);
+    if (!acceptMutation(
+      s,
+      'catalog/${action.name}',
+      body,
+      store.actor(s)['id'] as String,
+      clock(),
+      store.fail,
+    )) {
+      return; // Already applied.
+    }
     final actor = store.actor(s)['full_name'];
     final rooms = s['rooms'] as List;
     final archives = s.putIfAbsent('roomArchives', () => <dynamic>[]) as List;
@@ -97,6 +113,25 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
     }
 
     switch (action) {
+      case RoomCatalogAction.setCategoryEstimate:
+        final cat = category();
+        final minutes = body['minutes'];
+        if (minutes is! int || minutes < 5 || minutes > 480) {
+          store.fail('Temps estimé de 5 à 480 minutes.');
+        }
+        final estimates =
+            s.putIfAbsent('estimates', () => <String, dynamic>{}) as Map;
+        final current = estimates[cat];
+        if (current != null &&
+            body['version'] != null &&
+            body['version'] != current['version']) {
+          store.fail('Cette estimation a changé. Actualisez.', 409);
+        }
+        estimates[cat] = {
+          'minutes': minutes,
+          'version': ((current?['version'] as int?) ?? 0) + 1,
+        };
+        return;
       case RoomCatalogAction.createRange:
         final floor = body['floor'], from = body['from'], to = body['to'];
         if (floor is! int || floor < 1 || floor > 9) {

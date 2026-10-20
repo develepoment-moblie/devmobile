@@ -59,7 +59,15 @@ Map<String, dynamic>? openCleaning(Map<String, dynamic> state, String number) =>
         .lastOrNull;
 
 /// Forgets an unfinished cleaning when the room's situation changes.
-void dropOpenCleaning(Map<String, dynamic> state, String number) =>
-    (state['cleanings'] as List? ?? []).removeWhere(
-      (c) => c['room_number'] == number && c['approved_at'] == null,
-    );
+void dropOpenCleaning(Map<String, dynamic> state, String number) {
+  final cleanings = state['cleanings'] as List? ?? [];
+  final dropped = {
+    for (final c in cleanings)
+      if (c['room_number'] == number && c['approved_at'] == null) c['id'],
+  };
+  cleanings.removeWhere((c) => dropped.contains(c['id']));
+  // Their timers go with them.
+  (state['timerSegments'] as List? ?? []).removeWhere(
+    (t) => dropped.contains(t['cleaning_id']),
+  );
+}

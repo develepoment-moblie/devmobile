@@ -6,8 +6,6 @@ import 'package:nova_paris/housekeeping/services/app_exception.dart';
 import 'package:nova_paris/housekeeping/services/hotel_event_handlers.dart';
 import 'package:nova_paris/housekeeping/services/housekeeping_store.dart';
 import 'package:nova_paris/housekeeping/services/room_catalog_backend.dart';
-import 'package:nova_paris/housekeeping/services/sqlite_housekeeping.dart';
-import 'package:nova_paris/housekeeping/services/sqlite_room_catalog.dart';
 import 'package:nova_paris/shared/models/app_user.dart';
 import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_events.dart';
@@ -17,6 +15,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'photo_fixture.dart';
+import 'test_backends.dart';
 
 // Fictional team, independent of the user_management module.
 class TestStaff implements StaffDirectory {
@@ -42,8 +41,8 @@ void main() {
   late String path;
   late AppSession session;
   late HousekeepingStore store;
-  late SqliteHousekeeping backend;
-  late SqliteRoomCatalog catalog;
+  late TestHousekeeping backend;
+  late TestCatalog catalog;
   final emitted = <AppEvent>[];
   final denied = throwsA(isA<AppServiceException>());
 
@@ -57,8 +56,8 @@ void main() {
     session.events.on<AppEvent>().listen(emitted.add);
     store = HousekeepingStore(session);
     listenToHotelEvents(session.events, store);
-    backend = SqliteHousekeeping(store, events: session.events);
-    catalog = SqliteRoomCatalog(store);
+    backend = TestHousekeeping(store, events: session.events);
+    catalog = TestCatalog(store);
   }
 
   Future<void> reopen() async {
@@ -119,8 +118,12 @@ void main() {
       'housekeeping_lost_items',
       'housekeeping_category_tasks',
       'housekeeping_floors',
+      'housekeeping_timer_segments',
+      'housekeeping_category_estimates',
+      'housekeeping_availability',
+      'housekeeping_mutations',
     });
-    expect(await session.database.versionOf('housekeeping'), 2);
+    expect(await session.database.versionOf('housekeeping'), 3);
     login('amina');
     final state = await backend.snapshot();
     expect((state['rooms'] as List), hasLength(16));
@@ -168,7 +171,7 @@ void main() {
       );
       session = AppSession(database: database, staff: TestStaff());
       store = HousekeepingStore(session);
-      catalog = SqliteRoomCatalog(store);
+      catalog = TestCatalog(store);
       session.signIn(
         const AppUser(id: 'admin', fullName: 'Admin', role: AppRole.admin),
       );
@@ -196,16 +199,21 @@ void main() {
         'housekeeping_lost_items',
         'housekeeping_category_tasks',
         'housekeeping_floors',
+        'housekeeping_timer_segments',
+        'housekeeping_category_estimates',
+        'housekeeping_availability',
+        'housekeeping_mutations',
       ]) {
         await db.execute('DROP TABLE $table');
       }
-      await db.execute('ALTER TABLE housekeeping_rooms DROP COLUMN feedback');
-      await db.execute('ALTER TABLE housekeeping_rooms DROP COLUMN stayover');
+      for (final column in ['feedback', 'stayover', 'priority']) {
+        await db.execute('ALTER TABLE housekeeping_rooms DROP COLUMN $column');
+      }
       await db.update('module_versions', {
         'version': 1,
       }, where: "module = 'housekeeping'");
       await reopen();
-      expect(await session.database.versionOf('housekeeping'), 2);
+      expect(await session.database.versionOf('housekeeping'), 3);
       final kept = await room('305');
       expect((kept['employeeId'], kept['note']), ('sarah', 'Avant midi'));
       expect((kept['stayover'], kept['feedback']), (false, null));
@@ -214,6 +222,41 @@ void main() {
       expect((await room('305'))['cleaning'], 'inProgress');
     },
   );
+
+  test('a version 2 database upgrades to version 3 in place', () async {
+    login('amina');
+    await action(
+      'assign',
+      number: '305',
+      extra: {'employeeId': 'sarah', 'note': 'VIP', 'urgent': true},
+    );
+    final db = session.database.database;
+    for (final table in [
+      'housekeeping_timer_segments',
+      'housekeeping_category_estimates',
+      'housekeeping_availability',
+      'housekeeping_mutations',
+    ]) {
+      await db.execute('DROP TABLE $table');
+    }
+    await db.execute('ALTER TABLE housekeeping_rooms DROP COLUMN priority');
+    for (final column in ['finished_at', 'duration_ms']) {
+      await db.execute(
+        'ALTER TABLE housekeeping_cleanings DROP COLUMN $column',
+      );
+    }
+    await db.update('module_versions', {
+      'version': 2,
+    }, where: "module = 'housekeeping'");
+    await reopen();
+    expect(await session.database.versionOf('housekeeping'), 3);
+    final kept = await room('305');
+    expect((kept['employeeId'], kept['priority']), ('sarah', 'normal'));
+    expect((await store.readState())['cleanings'], hasLength(1));
+    login('sarah');
+    await action('start', number: '305');
+    expect((await room('305'))['cleaning'], 'inProgress');
+  });
 
   test('full cleaning cycle persists and announces the ready room', () async {
     login('amina');

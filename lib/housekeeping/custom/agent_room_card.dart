@@ -66,6 +66,21 @@ class AgentRoomCard extends StatelessWidget {
                 '${room.category} · Étage ${room.floor}',
                 style: const TextStyle(fontSize: 12),
               ),
+              if (priorityBadge(room.priority) case final badge?) ...[
+                const SizedBox(height: 8),
+                badge,
+              ],
+              if (room.timerState == 'running') ...[
+                const SizedBox(height: 6),
+                const Text(
+                  'Minuteur en cours',
+                  style: TextStyle(
+                    color: AppColors.green,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12.5,
+                  ),
+                ),
+              ],
               if (room.stayover) ...[
                 const SizedBox(height: 6),
                 const Text(

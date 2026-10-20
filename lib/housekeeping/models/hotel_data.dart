@@ -4,7 +4,9 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../services/app_exception.dart';
+import '../services/auto_assignment.dart';
 import '../services/housekeeping_backend.dart';
+import '../services/mutation_meta.dart';
 import '../services/sqlite_housekeeping.dart';
 import 'cleaning_stats.dart';
 import 'lost_item.dart';
@@ -45,6 +47,13 @@ class HotelData extends ChangeNotifier {
   final List<CleaningRecord> cleanings = [];
   final List<LostItem> lostItems = [];
   final Map<int, String> floorNames = {};
+
+  /// Estimated cleaning minutes per room category (Manager's settings).
+  final Map<String, int> estimates = {};
+
+  /// Availability by "yyyy-MM-dd|agentId" (supervisor only).
+  final Map<String, ({bool available, int minutes})> availability = {};
+  static const defaultCapacityMinutes = 420;
   String floorName(int floor) => floorNames[floor] ?? 'Étage $floor';
 
   String? connectionError;
@@ -135,6 +144,8 @@ class HotelData extends ChangeNotifier {
       room.approvedBy = r['approvedBy'] as String?;
       room.feedback = r['feedback'] as String?;
       room.stayover = r['stayover'] == true;
+      room.priority = r['priority'] as String? ?? 'normal';
+      room.applyTimer(r['timer']);
       room.note = r['note'] as String;
       room.urgent = r['urgent'] as bool;
       room.version = r['version'] as int;
@@ -209,6 +220,21 @@ class HotelData extends ChangeNotifier {
         for (final f in json['floors'] as List? ?? [])
           f['number'] as int: f['name'] as String,
       });
+    estimates
+      ..clear()
+      ..addAll({
+        for (final e in (json['estimates'] as Map? ?? {}).entries)
+          e.key as String: e.value['minutes'] as int,
+      });
+    availability
+      ..clear()
+      ..addAll({
+        for (final a in json['availability'] as List? ?? [])
+          '${a['date']}|${a['agent_id']}': (
+            available: a['available'] as bool,
+            minutes: a['capacity_minutes'] as int,
+          ),
+      });
   }
 
   Future<void> _remote(String path, Map<String, dynamic> body) async {
@@ -221,7 +247,8 @@ class HotelData extends ChangeNotifier {
     }
     _requestActive = true;
     try {
-      await api.mutate(path, body);
+      // Client id and clock on every mutation, for offline replay.
+      await api.mutate(path, {...body, ...mutationMeta()});
       try {
         _apply(await api.snapshot());
         connectionError = null;
@@ -438,4 +465,114 @@ class HotelData extends ChangeNotifier {
   // ----------------------------------------------------------- statistics
   CleaningStats statsSince(DateTime since) =>
       CleaningStats.compute(cleanings, staffIds, since: since);
+
+  // ------------------------------------------------------- cleaning timer
+  /// The assigned agent controls the timer of a cleaning in progress.
+  bool canControlTimer(Room room) =>
+      canClean(room) && room.cleaning == CleaningStatus.inProgress;
+
+  Future<void> pauseTimer(Room room) =>
+      _remote('/v1/rooms/${room.number}/pause', {'version': room.version});
+
+  Future<void> resumeTimer(Room room) =>
+      _remote('/v1/rooms/${room.number}/resume', {'version': room.version});
+
+  Future<void> stopTimer(Room room) =>
+      _remote('/v1/rooms/${room.number}/stop', {'version': room.version});
+
+  // ------------------------------------------------------------- priority
+  Future<void> setPriority(Room room, CleaningPriority priority) => _remote(
+    '/v1/rooms/${room.number}/priority',
+    {'version': room.version, 'value': priority.name},
+  );
+
+  // ------------------------------------------------------- availability
+  static String dateKey(DateTime day) =>
+      '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+
+  /// Availability of an agent on [day]; available full time by default.
+  ({bool available, int minutes}) availabilityOf(
+    String agentId,
+    DateTime day,
+  ) =>
+      availability['${dateKey(day)}|$agentId'] ??
+      (available: true, minutes: defaultCapacityMinutes);
+
+  Future<void> setAvailability(
+    String agentId,
+    DateTime day, {
+    required bool available,
+    required int minutes,
+  }) => _remote('/v1/availability/$agentId/set', {
+    'date': dateKey(day),
+    'available': available,
+    'capacityMinutes': minutes,
+  });
+
+  // ----------------------------------------------------- auto-assignment
+  /// Rooms waiting for an agent.
+  List<Room> get unassignedRooms => [
+    for (final r in rooms)
+      if (r.needsCleaning &&
+          r.cleaning == CleaningStatus.waiting &&
+          r.employeeId == null)
+        r,
+  ];
+
+  AssignableRoom _assignable(Room r) => AssignableRoom(
+    number: r.number,
+    floor: r.floor,
+    category: r.category,
+    priority: CleaningPriority.parse(r.priority),
+    urgent: r.urgent,
+    stayover: r.stayover,
+  );
+
+  /// A proposal for [day]: unassigned rooms spread over available agents,
+  /// counting the work they already have.
+  AssignmentPlan proposePlan(DateTime day) {
+    final staff = <Housekeeper>[];
+    for (final entry in agentOptions.entries) {
+      final a = availabilityOf(entry.key, day);
+      if (!a.available || a.minutes == 0) continue;
+      final current = [
+        for (final r in rooms)
+          if (r.employeeId == entry.key &&
+              r.needsCleaning &&
+              (r.cleaning == CleaningStatus.waiting ||
+                  r.cleaning == CleaningStatus.inProgress))
+            r,
+      ];
+      staff.add(
+        Housekeeper(
+          id: entry.key,
+          name: entry.value,
+          capacityMinutes: a.minutes,
+          assignedMinutes: current.fold(
+            0,
+            (sum, r) => sum + estimateMinutes(_assignable(r), estimates),
+          ),
+          floors: {for (final r in current) r.floor},
+        ),
+      );
+    }
+    return planAssignments(
+      rooms: [for (final r in unassignedRooms) _assignable(r)],
+      staff: staff,
+      estimates: estimates,
+    );
+  }
+
+  /// Applies the reviewed plan in one step: all rooms or none.
+  Future<void> applyPlan(List<PlannedAssignment> plan) =>
+      _remote('/v1/plans/new/apply', {
+        'assignments': [
+          for (final a in plan)
+            {
+              'roomNumber': a.room.number,
+              'employeeId': a.agentId,
+              'version': roomByNumber(a.room.number).version,
+            },
+        ],
+      });
 }

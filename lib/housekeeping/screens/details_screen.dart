@@ -11,6 +11,8 @@ import '../models/room.dart';
 import 'assign_task_screen.dart';
 import 'task_photo_screen.dart';
 import '../custom/add_room_task_dialog.dart';
+import '../custom/cleaning_timer_card.dart';
+import '../services/auto_assignment.dart';
 import '../custom/draft_guard.dart';
 import '../custom/lost_item_dialog.dart';
 import '../custom/report_problem_dialog.dart';
@@ -282,6 +284,33 @@ class _DetailsScreenState extends State<DetailsScreen> {
                     ),
                   ],
                 ),
+              ),
+            ],
+            if (room.needsCleaning) CleaningTimerCard(data: data, room: room),
+            if (data.isSupervisor &&
+                (room.needsCleaning || room.status == RoomStatus.occupied)) ...[
+              const SizedBox(height: 16),
+              const Text(
+                'Priorité du nettoyage',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final p in CleaningPriority.values)
+                    ChoiceChip(
+                      label: Text(p.label),
+                      selected: room.priority == p.name,
+                      onSelected: saving || room.priority == p.name
+                          ? null
+                          : (_) => action(
+                              () => data.setPriority(room, p),
+                              'Priorité : ${p.label}',
+                            ),
+                    ),
+                ],
               ),
             ],
             const SizedBox(height: 20),

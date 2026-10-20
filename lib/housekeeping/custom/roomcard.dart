@@ -3,7 +3,23 @@ import 'package:flutter/material.dart';
 import '../models/room.dart';
 import '../../shared/custom/animations.dart';
 import '../../shared/custom/app_theme.dart';
+import '../services/auto_assignment.dart';
 import 'nova_icon.dart';
+
+/// Badge for a cleaning priority other than normal, or null.
+Widget? priorityBadge(String priority) {
+  final p = CleaningPriority.parse(priority);
+  if (p == CleaningPriority.normal) return null;
+  return StatusBadge(
+    p.label,
+    color: p == CleaningPriority.checkout
+        ? AppColors.accent
+        : AppColors.goldDeep,
+    background: p == CleaningPriority.checkout
+        ? AppColors.orangeLight
+        : const Color(0xFFF6EEDC),
+  );
+}
 
 (Color, Color) roomTone(Room room, {bool cleaning = true}) {
   if (!cleaning) {
@@ -143,10 +159,17 @@ class Roomcard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      StatusBadge(
-                        cleaning ? room.cleaningLabel : room.statusLabel,
-                        color: color,
-                        background: background,
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          StatusBadge(
+                            cleaning ? room.cleaningLabel : room.statusLabel,
+                            color: color,
+                            background: background,
+                          ),
+                          ?priorityBadge(room.priority),
+                        ],
                       ),
                     ],
                   ),

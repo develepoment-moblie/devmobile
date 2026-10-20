@@ -24,6 +24,35 @@ class Room {
 
   /// Occupied room with a requested daily cleaning (recouche).
   bool stayover = false;
+
+  /// Cleaning priority: normal, checkout, vip or early (check-in).
+  String priority = 'normal';
+
+  /// The cleaning timer, once started: 'running', 'paused' or 'stopped'.
+  String? timerState;
+  Duration timerClosed = Duration.zero;
+  DateTime? timerRunningSince;
+
+  /// Actual working time, once the timer is stopped.
+  Duration? timerDuration;
+
+  /// Time worked so far, pauses excluded, counting a running timer up to [now].
+  Duration elapsed([DateTime? now]) => timerRunningSince == null
+      ? timerClosed
+      : timerClosed + (now ?? DateTime.now()).difference(timerRunningSince!);
+
+  void applyTimer(Object? source) {
+    final t = source is Map ? source : null;
+    timerState = t?['state'] as String?;
+    timerClosed = Duration(milliseconds: (t?['closedMs'] as int?) ?? 0);
+    timerRunningSince = t?['runningSince'] == null
+        ? null
+        : DateTime.parse(t!['runningSince'] as String);
+    timerDuration = t?['durationMs'] == null
+        ? null
+        : Duration(milliseconds: t!['durationMs'] as int);
+  }
+
   int version = 1;
   String note;
   bool urgent;
@@ -73,6 +102,8 @@ class Room {
     room.approvedBy = map['approvedBy'] as String?;
     room.feedback = map['feedback'] as String?;
     room.stayover = map['stayover'] == true;
+    room.priority = map['priority'] as String? ?? 'normal';
+    room.applyTimer(map['timer']);
     room.checklist
       ..clear()
       ..addAll((map['checklist'] as List).cast<bool>());

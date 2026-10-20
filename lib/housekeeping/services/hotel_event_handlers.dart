@@ -18,6 +18,7 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
       final room = activeRoom(state, e.roomNumber);
       if (room == null || room['status'] == 'occupied') return;
       room['status'] = 'occupied';
+      room['priority'] = 'normal';
       resetCleaning(room);
       room['stayover'] = false;
       dropOpenCleaning(state, e.roomNumber);
@@ -36,6 +37,10 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
         room['status'] = 'dirty';
         resetCleaning(room);
         room['stayover'] = false;
+        // A departure is cleaned before ordinary rooms.
+        if (room['priority'] == null || room['priority'] == 'normal') {
+          room['priority'] = 'checkout';
+        }
         dropOpenCleaning(state, e.roomNumber);
         room['note'] = 'Le client vient de quitter la chambre';
         addHistory(room, 'Départ du client · chambre à nettoyer');

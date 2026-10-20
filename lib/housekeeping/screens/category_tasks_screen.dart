@@ -111,14 +111,22 @@ class _CategoryTasksEditorState extends State<CategoryTasksEditor> {
   late final List<String> _labels = [...(_saved?.labels ?? TaskSchema.labels)];
   late final List<String> _initial = [..._labels];
   final _input = TextEditingController();
+  late final _savedEstimate =
+      widget.catalog.snapshot?.estimates[widget.category];
+  late final _estimate = TextEditingController(
+    text: _savedEstimate == null ? '' : '${_savedEstimate.minutes}',
+  );
   bool _busy = false;
   String? _error;
   bool get _dirty =>
-      _input.text.isNotEmpty || _labels.join('\n') != _initial.join('\n');
+      _input.text.isNotEmpty ||
+      _labels.join('\n') != _initial.join('\n') ||
+      _estimate.text.trim() != '${_savedEstimate?.minutes ?? ''}';
 
   @override
   void dispose() {
     _input.dispose();
+    _estimate.dispose();
     super.dispose();
   }
 
@@ -146,11 +154,25 @@ class _CategoryTasksEditorState extends State<CategoryTasksEditor> {
       setState(() => _error = 'Gardez au moins une tâche.');
       return;
     }
+    final estimate = _estimate.text.trim();
+    final minutes = int.tryParse(estimate);
+    if (estimate.isNotEmpty &&
+        (minutes == null || minutes < 5 || minutes > 480)) {
+      setState(() => _error = 'Temps estimé : de 5 à 480 minutes.');
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
+      if (minutes != null && minutes != _savedEstimate?.minutes) {
+        await widget.catalog.change(RoomCatalogAction.setCategoryEstimate, {
+          'category': widget.category,
+          'minutes': minutes,
+          'version': ?_savedEstimate?.version,
+        });
+      }
       await widget.catalog.change(RoomCatalogAction.setCategoryTasks, {
         'category': widget.category,
         'labels': _labels,
@@ -249,6 +271,17 @@ class _CategoryTasksEditorState extends State<CategoryTasksEditor> {
                         icon: const Icon(Icons.add),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _estimate,
+                    enabled: !_busy,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Temps estimé de nettoyage (minutes)',
+                      helperText: 'Utilisé par l’attribution automatique (30 min par défaut).',
+                    ),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(

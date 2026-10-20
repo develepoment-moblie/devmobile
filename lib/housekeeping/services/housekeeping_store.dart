@@ -16,7 +16,7 @@ import 'local_session_store.dart';
 // step to [migrate] for every change; never edit a step already pushed.
 final housekeepingSchema = ModuleSchema(
   module: 'housekeeping',
-  version: 2,
+  version: 3,
   migrate: (tx, from, to) async {
     if (from < 1) {
       await tx.execute('''CREATE TABLE housekeeping_rooms (
@@ -74,6 +74,39 @@ final housekeepingSchema = ModuleSchema(
         number INTEGER PRIMARY KEY CHECK(number BETWEEN 1 AND 9),
         name TEXT NOT NULL, version INTEGER NOT NULL)''');
     }
+    if (from < 3) {
+      // Cleaning priority: checkout, VIP or early check-in first.
+      await tx.execute(
+        "ALTER TABLE housekeeping_rooms ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' "
+        "CHECK(priority IN ('normal','checkout','vip','early'))",
+      );
+      // Actual working time of a cleaning, pauses excluded.
+      await tx.execute(
+        'ALTER TABLE housekeeping_cleanings ADD COLUMN finished_at TEXT',
+      );
+      await tx.execute(
+        'ALTER TABLE housekeeping_cleanings ADD COLUMN duration_ms INTEGER',
+      );
+      // One row per running stretch of a cleaning timer (start/resume to
+      // pause/stop). An open row (ended_at NULL) is a running timer.
+      await tx.execute('''CREATE TABLE housekeeping_timer_segments (
+        id TEXT PRIMARY KEY, cleaning_id TEXT NOT NULL,
+        room_number TEXT NOT NULL, agent_id TEXT NOT NULL,
+        started_at TEXT NOT NULL, ended_at TEXT)''');
+      await tx.execute('''CREATE TABLE housekeeping_category_estimates (
+        category TEXT PRIMARY KEY,
+        minutes INTEGER NOT NULL CHECK(minutes BETWEEN 5 AND 480),
+        version INTEGER NOT NULL)''');
+      await tx.execute('''CREATE TABLE housekeeping_availability (
+        date TEXT NOT NULL, agent_id TEXT NOT NULL,
+        available INTEGER NOT NULL CHECK(available IN (0,1)),
+        capacity_minutes INTEGER NOT NULL CHECK(capacity_minutes BETWEEN 0 AND 720),
+        PRIMARY KEY(date, agent_id))''');
+      // Client mutation ids already applied (idempotent replay for sync).
+      await tx.execute('''CREATE TABLE housekeeping_mutations (
+        id TEXT PRIMARY KEY, path TEXT NOT NULL, actor TEXT NOT NULL,
+        client_timestamp TEXT NOT NULL, applied_at TEXT NOT NULL)''');
+    }
     // A new install gets its starting data once every table exists.
     if (from < 1) {
       await HousekeepingStore._write(tx, housekeepingSeedState());
@@ -103,6 +136,10 @@ Map<String, dynamic> housekeepingSeedState({
       'lostItems': <dynamic>[],
       'categoryTasks': <String, dynamic>{},
       'floors': <dynamic>[],
+      'timerSegments': <dynamic>[],
+      'estimates': <String, dynamic>{},
+      'availability': <dynamic>[],
+      'mutations': <dynamic>[],
     };
   }
   final seed = jsonDecode(housekeepingSeedJson) as Map<String, dynamic>;
@@ -127,6 +164,10 @@ Map<String, dynamic> housekeepingSeedState({
       for (var floor = 1; floor <= 4; floor++)
         {'number': floor, 'name': 'Étage $floor', 'version': 1},
     ],
+    'timerSegments': <dynamic>[],
+    'estimates': <String, dynamic>{},
+    'availability': <dynamic>[],
+    'mutations': <dynamic>[],
   };
 }
 
@@ -238,6 +279,7 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
           'archived': row['archived'] == 1,
           'feedback': row['feedback'],
           'stayover': row['stayover'] == 1,
+          'priority': row['priority'] ?? 'normal',
         },
     ];
     final reads = <String, dynamic>{};
@@ -303,6 +345,36 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
         ))
           Map<String, dynamic>.from(row),
       ],
+      'timerSegments': [
+        for (final row in await db.query(
+          'housekeeping_timer_segments',
+          orderBy: 'started_at',
+        ))
+          Map<String, dynamic>.from(row),
+      ],
+      'estimates': {
+        for (final row in await db.query('housekeeping_category_estimates'))
+          row['category'] as String: {
+            'minutes': row['minutes'],
+            'version': row['version'],
+          },
+      },
+      'availability': [
+        for (final row in await db.query('housekeeping_availability'))
+          {
+            'date': row['date'],
+            'agent_id': row['agent_id'],
+            'available': row['available'] == 1,
+            'capacity_minutes': row['capacity_minutes'],
+          },
+      ],
+      'mutations': [
+        for (final row in await db.query(
+          'housekeeping_mutations',
+          columns: ['id'],
+        ))
+          {'id': row['id']},
+      ],
       // The shape the business rules expect for the staff list.
       'users': [
         for (final user in staff)
@@ -359,6 +431,7 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             'archived': archived ? 1 : 0,
             'feedback': r['feedback'],
             'stayover': r['stayover'] == true ? 1 : 0,
+            'priority': r['priority'] ?? 'normal',
           },
     ]);
     await sync('housekeeping_cleanings', 'id', [
@@ -374,10 +447,58 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             'submitted_at',
             'approved_at',
             'refusals',
+            'finished_at',
+            'duration_ms',
           ])
             k: c[k],
         },
     ]);
+    await sync('housekeeping_timer_segments', 'id', [
+      for (final t in state['timerSegments'] as List? ?? [])
+        {
+          for (final k in [
+            'id',
+            'cleaning_id',
+            'room_number',
+            'agent_id',
+            'started_at',
+            'ended_at',
+          ])
+            k: t[k],
+        },
+    ]);
+    await sync('housekeeping_category_estimates', 'category', [
+      for (final entry in (state['estimates'] as Map? ?? {}).entries)
+        {
+          'category': entry.key,
+          'minutes': entry.value['minutes'],
+          'version': entry.value['version'],
+        },
+    ]);
+    // Availability has a composite key: rewritten as a whole (small table).
+    await tx.delete('housekeeping_availability');
+    for (final a in state['availability'] as List? ?? []) {
+      await tx.insert('housekeeping_availability', {
+        'date': a['date'],
+        'agent_id': a['agent_id'],
+        'available': a['available'] == true ? 1 : 0,
+        'capacity_minutes': a['capacity_minutes'],
+      });
+    }
+    // The mutation log only grows: insert the new ids.
+    for (final m in state['mutations'] as List? ?? []) {
+      if (m['path'] == null) continue; // already stored (read as id only)
+      await tx.insert('housekeeping_mutations', {
+        for (final k in [
+          'id',
+          'path',
+          'actor',
+          'client_timestamp',
+          'applied_at',
+        ])
+          k: m[k],
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
     await sync('housekeeping_lost_items', 'id', [
       for (final item in state['lostItems'] as List? ?? [])
         {

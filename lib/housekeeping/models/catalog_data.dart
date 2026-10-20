@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../services/mutation_meta.dart';
 import '../services/room_catalog_backend.dart';
 import 'room.dart';
 
@@ -72,7 +73,7 @@ class CatalogData extends ChangeNotifier {
     Map<String, dynamic> body,
   ) async {
     try {
-      await backend.mutate(action, body);
+      await backend.mutate(action, {...body, ...mutationMeta()});
     } finally {
       await load();
     }

@@ -6,8 +6,6 @@ import 'package:nova_paris/housekeeping/services/app_exception.dart';
 import 'package:nova_paris/housekeeping/services/hotel_event_handlers.dart';
 import 'package:nova_paris/housekeeping/services/housekeeping_store.dart';
 import 'package:nova_paris/housekeeping/services/room_catalog_backend.dart';
-import 'package:nova_paris/housekeeping/services/sqlite_housekeeping.dart';
-import 'package:nova_paris/housekeeping/services/sqlite_room_catalog.dart';
 import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_events.dart';
 import 'package:nova_paris/shared/services/app_session.dart';
@@ -16,6 +14,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'housekeeping_store_test.dart' show TestStaff;
 import 'photo_fixture.dart';
+import 'test_backends.dart';
 
 // Rules of the stock items, refusal, recouche, lost and found, statistics
 // and the Manager's catalog, on a real SQLite database.
@@ -25,8 +24,8 @@ void main() {
   late Directory directory;
   late AppSession session;
   late HousekeepingStore store;
-  late SqliteHousekeeping backend;
-  late SqliteRoomCatalog catalog;
+  late TestHousekeeping backend;
+  late TestCatalog catalog;
   final emitted = <AppEvent>[];
   final denied = throwsA(isA<AppServiceException>());
 
@@ -42,8 +41,8 @@ void main() {
     session.events.on<AppEvent>().listen(emitted.add);
     store = HousekeepingStore(session);
     listenToHotelEvents(session.events, store);
-    backend = SqliteHousekeeping(store, events: session.events);
-    catalog = SqliteRoomCatalog(store);
+    backend = TestHousekeeping(store, events: session.events);
+    catalog = TestCatalog(store);
   });
   tearDown(() async {
     await session.database.close();
