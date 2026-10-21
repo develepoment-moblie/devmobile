@@ -42,7 +42,15 @@ void main() {
     }
   }
 
-  Future<void> open(WidgetTester tester, String id) async {
+  // Real SQLite takes longer when the whole suite runs in parallel: wait for
+  // [finder] rather than a fixed time.
+  Future<void> settleUntil(WidgetTester tester, Finder finder) async {
+    for (var i = 0; i < 40 && finder.evaluate().isEmpty; i++) {
+      await settle(tester);
+    }
+  }
+
+  Future<void> open(WidgetTester tester, String id, {Finder? until}) async {
     tester.view.physicalSize = const Size(402, 874);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -56,7 +64,7 @@ void main() {
         ),
       ),
     );
-    await settle(tester);
+    await settleUntil(tester, until ?? find.byType(NavigationBar));
     addTearDown(() => tester.pumpWidget(const SizedBox()));
   }
 
@@ -77,9 +85,17 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Signaler un problème'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Plomberie'));
     await tester.enterText(find.byType(TextFormField), 'Fuite sous le lavabo');
-    await tester.tap(find.text('Signaler'));
-    await settle(tester);
+    await tester.tap(find.text('Mettre la chambre hors service'));
+    await tester.pump();
+    await tester.scrollUntilVisible(
+      find.text('Envoyer le signalement'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('Envoyer le signalement'));
+    await settleUntil(tester, find.text('Problème signalé à la maintenance'));
     expect(find.text('Problème signalé à la maintenance'), findsOneWidget);
     final state = await tester.runAsync(
       () => housekeepingStoreFor(session).readState(),
@@ -114,7 +130,7 @@ void main() {
       ),
     );
     await tester.tap(find.text('Accueil de l’app'));
-    await settle(tester);
+    await settleUntil(tester, find.text('Stock'));
     await tester.tap(find.text('Stock').last);
     await tester.pump();
     await tester.tap(find.text('Ménage').last);
@@ -126,7 +142,7 @@ void main() {
   });
 
   testWidgets('the manager gets the room catalog', (tester) async {
-    await open(tester, 'manager');
+    await open(tester, 'manager', until: find.byType(ManageRoomsScreen));
     expect(find.byType(ManageRoomsScreen), findsOneWidget);
   });
 

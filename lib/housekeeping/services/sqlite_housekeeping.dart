@@ -9,6 +9,7 @@ import 'auto_assignment.dart';
 import 'cleaning_timer.dart';
 import 'housekeeping_store.dart';
 import 'inspection_scoring.dart';
+import 'issue_rules.dart';
 import 'local_attachment_store.dart';
 import 'local_session_store.dart';
 import 'mutation_meta.dart';
@@ -20,8 +21,9 @@ import 'room_rules.dart';
 // Paths: /v1/rooms/<number>/<action>, /v1/supplies/<id|new>/<action>,
 // /v1/lost/<id|new>/<action>, /v1/availability/<agentId>/set,
 // /v1/plans/new/apply, /v1/inspection-rules/<category>/set,
+// /v1/issues/<id>/<bring-back|close>, /v1/settings/lost-archive-days/set,
 // /v1/notifications/read. approve and refuse take optional inspection
-// ratings (see _inspect).
+// ratings (see _inspect); report creates a problem report (housekeeping_issues).
 // Every body carries mutationId (UUID v4) and clientTimestamp; a repeated
 // mutationId is ignored. Times are taken from [clock] inside the
 // transaction, never from the client.
@@ -82,6 +84,18 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       for (final item in s['lostItems'] as List? ?? [])
         if (supervisor || item['found_by'] == actor['id']) item,
     ];
+    // Agents follow their own reports; the supervisor sees them all.
+    s['issues'] = [
+      for (final issue in s['issues'] as List? ?? [])
+        if (supervisor || issue['reported_by'] == actor['id']) issue,
+    ];
+    s['lostArchive'] = {
+      'days': lostArchiveDays(s),
+      'version':
+          ((s['settings'] as Map?)?[lostArchiveDaysSetting]
+              as Map?)?['version'] ??
+          0,
+    };
     final now = clock();
     for (final room in s['rooms'] as List) {
       room['timer'] = timerView(
@@ -105,6 +119,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       'categoryTasks',
       'timerSegments',
       'mutations',
+      'settings',
     ]) {
       s.remove(key);
     }
@@ -296,7 +311,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
           300,
           'Décrivez l’objet en 300 caractères maximum.',
         );
-        items.insert(0, {
+        final item = <String, dynamic>{
           'id': newId('lost'),
           'room_number': number,
           'description': description,
@@ -306,8 +321,19 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
           'found_at': now.toIso8601String(),
           'returned_at': null,
           'returned_to': null,
+          'status': 'found',
+          'archived_at': null,
           'version': 1,
-        });
+        };
+        addLostEvent(
+          item,
+          'found',
+          now,
+          actorId: actor['id'] as String,
+          actorName: actor['name'] as String,
+          message: description,
+        );
+        items.insert(0, item);
         addHistory(room!, '${actor['name']} · Objet trouvé : $description');
         if (!supervisor) {
           addNotification(
@@ -327,16 +353,149 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
         'Ces données ont changé. Actualisez.',
         409,
       );
-      require(action == 'return', 'Action inconnue.');
-      require(supervisor, 'Restitution réservée à la gouvernante.', 403);
-      require(item['returned_at'] == null, 'Objet déjà restitué.', 409);
-      item['returned_to'] = text(
-        body['returnedTo'],
-        120,
-        'Indiquez à qui l’objet est rendu.',
+      require(
+        ['return', 'notify', 'archive'].contains(action),
+        'Action inconnue.',
       );
-      item['returned_at'] = now.toIso8601String();
+      require(supervisor, 'Objets trouvés gérés par la gouvernante.', 403);
+      final status = item['status'] ?? 'found';
+      require(
+        status == 'found' || status == 'notified',
+        status == 'returned' ? 'Objet déjà remis.' : 'Objet archivé.',
+        409,
+      );
+      void step(String kind, {String? channel, String? message}) =>
+          addLostEvent(
+            item,
+            kind,
+            now,
+            actorId: actor['id'] as String,
+            actorName: actor['name'] as String,
+            channel: channel,
+            message: message,
+          );
+      switch (action) {
+        case 'return':
+          item['returned_to'] = text(
+            body['returnedTo'],
+            120,
+            'Indiquez à qui l’objet est rendu.',
+          );
+          item['returned_at'] = now.toIso8601String();
+          item['status'] = 'returned';
+          step('returned', message: 'Rendu à ${item['returned_to']}');
+        case 'notify':
+          // Guest contact details are not shared with housekeeping: the
+          // attempt is logged, the call or message is made outside the app.
+          final channel = body['channel'];
+          require(
+            contactChannels.contains(channel),
+            'Choisissez comment le client a été prévenu.',
+          );
+          final message = text(
+            body['message'],
+            500,
+            'Saisissez le message envoyé (500 caractères maximum).',
+          );
+          item['status'] = 'notified';
+          step('notified', channel: channel as String, message: message);
+        default: // archive
+          item['status'] = 'archived';
+          item['archived_at'] = now.toIso8601String();
+          step('archived', message: 'Archivé manuellement');
+      }
       bumpVersion(item);
+      return;
+    }
+
+    // ------------------------------------------------------------- settings
+    if (family == 'settings') {
+      require(
+        key == 'lost-archive-days' && action == 'set',
+        'Action inconnue.',
+      );
+      require(supervisor, 'Réglage réservé à la gouvernante.', 403);
+      final settings =
+          s.putIfAbsent('settings', () => <String, dynamic>{}) as Map;
+      final current = settings[lostArchiveDaysSetting] as Map?;
+      require(
+        body['version'] == ((current?['version'] as int?) ?? 0),
+        'Ce réglage a changé. Actualisez.',
+        409,
+      );
+      final days = body['value'];
+      require(
+        days is int && days >= 7 && days <= 365,
+        'Délai d’archivage de 7 à 365 jours.',
+      );
+      settings[lostArchiveDaysSetting] = {
+        'value': '$days',
+        'version': ((current?['version'] as int?) ?? 0) + 1,
+      };
+      return;
+    }
+
+    // ------------------------------------------------------ problem reports
+    if (family == 'issues') {
+      require(
+        supervisor,
+        'Suivi des signalements réservé à la gouvernante.',
+        403,
+      );
+      final issue = issuesOf(s).where((i) => i['id'] == key).firstOrNull;
+      if (issue == null) store.fail('Signalement introuvable.', 404);
+      require(
+        body['version'] == issue['version'],
+        'Ce signalement a changé. Actualisez.',
+        409,
+      );
+      require(issue['status'] != 'closed', 'Signalement déjà clôturé.', 409);
+      final number = issue['room_number'] as String;
+      void close(Map<String, dynamic> i) {
+        i['status'] = 'closed';
+        i['closed_at'] = now.toIso8601String();
+        i['closed_by_name'] = actor['name'];
+        bumpVersion(i);
+      }
+
+      switch (action) {
+        case 'bring-back':
+          require(
+            issue['status'] == 'resolved',
+            'La maintenance n’a pas encore terminé son intervention.',
+            409,
+          );
+          final room = activeRoom(s, number);
+          require(
+            room != null && room['status'] == 'maintenance',
+            'La chambre $number n’est plus en maintenance.',
+            409,
+          );
+          room!['status'] = 'dirty';
+          resetCleaning(room);
+          room['note'] = 'Nettoyage après intervention';
+          addHistory(
+            room,
+            '${actor['name']} · Remise à nettoyer après intervention',
+          );
+          bumpVersion(room);
+          // Every report the intervention resolved is closed with it.
+          for (final other in issuesOf(s)) {
+            if (other['room_number'] == number &&
+                other['status'] == 'resolved') {
+              close(other);
+            }
+          }
+        case 'close':
+          close(issue);
+          final room = activeRoom(s, number);
+          if (room != null) {
+            addHistory(room, '${actor['name']} · Signalement clôturé');
+            bumpVersion(room);
+          }
+        default:
+          store.fail('Action inconnue.');
+      }
       return;
     }
 
@@ -483,38 +642,120 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
         300,
         'Décrivez le problème en 300 caractères maximum.',
       );
-      require(body['urgent'] is bool, 'Signalement invalide.');
       require(
         supervisor || row['employeeId'] == actor['id'],
         'Cette chambre ne vous est pas attribuée.',
         403,
       );
-      require(
-        row['status'] != 'maintenance',
-        'Cette chambre est déjà en maintenance.',
-        409,
+      // A body without a category is the first version of the report
+      // (description + urgent): the room goes out of service unless occupied.
+      final legacy = !body.containsKey('category');
+      final String category, priority;
+      final bool outOfService;
+      final photos = <String>[];
+      String? voicePath;
+      int? voiceSeconds;
+      if (legacy) {
+        require(body['urgent'] is bool, 'Signalement invalide.');
+        require(
+          row['status'] != 'maintenance',
+          'Cette chambre est déjà en maintenance.',
+          409,
+        );
+        category = 'autre';
+        priority = body['urgent'] == true ? 'urgent' : 'normal';
+        outOfService = row['status'] != 'occupied';
+      } else {
+        require(
+          issueCategories.contains(body['category']),
+          'Choisissez une catégorie.',
+        );
+        require(
+          issuePriorities.contains(body['priority']),
+          'Choisissez une priorité.',
+        );
+        require(body['outOfService'] is bool, 'Signalement invalide.');
+        category = body['category'] as String;
+        priority = body['priority'] as String;
+        outOfService = body['outOfService'] as bool;
+        if (outOfService) {
+          require(
+            row['status'] != 'occupied',
+            'Chambre occupée : elle ne peut pas être mise hors service pendant le séjour.',
+            409,
+          );
+          require(
+            row['status'] != 'maintenance',
+            'Cette chambre est déjà hors service.',
+            409,
+          );
+        }
+        final images = body['photos'] ?? const [];
+        require(
+          images is List && images.length <= 3,
+          'Trois photos maximum par signalement.',
+        );
+        for (final image in images as List) {
+          require(image is String, 'Photo invalide.');
+          photos.add(storePhoto(image));
+        }
+        if (body['voicePath'] != null || body['voiceSeconds'] != null) {
+          final path = body['voicePath'], seconds = body['voiceSeconds'];
+          require(
+            path is String && voicePathPattern.hasMatch(path),
+            'Note vocale invalide.',
+          );
+          require(
+            seconds is int && seconds >= 1 && seconds <= 60,
+            'Note vocale de 1 à 60 secondes.',
+          );
+          voicePath = path as String;
+          voiceSeconds = seconds as int;
+        }
+      }
+      final label = issueCategoryLabels[category]!;
+      issuesOf(s).insert(
+        0,
+        newIssue(
+          roomNumber: key,
+          category: category,
+          description: description,
+          priority: priority,
+          outOfService: outOfService,
+          reportedBy: actor['id'] as String,
+          reportedByName: actor['name'] as String,
+          at: now,
+          photos: photos,
+          voicePath: voicePath,
+          voiceSeconds: voiceSeconds,
+        ),
       );
-      // An occupied room stays occupied: the guest is still there.
-      if (row['status'] != 'occupied') {
+      if (outOfService) {
         row['status'] = 'maintenance';
         resetCleaning(row);
         dropOpenCleaning(s, key);
         row['note'] = description;
       }
-      addHistory(row, '${actor['name']} · Problème signalé : $description');
+      final urgent = priority == 'high' || priority == 'urgent';
+      addHistory(
+        row,
+        '${actor['name']} · Problème signalé ($label) : $description${outOfService ? ' · hors service' : ''}',
+      );
       addNotification(
         s,
-        title: body['urgent'] == true ? 'Maintenance urgente' : 'Maintenance',
-        message: 'Chambre $key : $description',
+        title: urgent ? 'Maintenance urgente' : 'Maintenance',
+        message: 'Chambre $key · $label : $description',
         roomNumber: key,
         audience: 'supervisor',
       );
       bumpVersion(row);
+      // The shared event carries only a description and an urgent flag: the
+      // category goes in the description; the full report stays here.
       announce.add(
         MaintenanceRequested(
           key,
-          description: description,
-          urgent: body['urgent'] as bool,
+          description: legacy ? description : '[$label] $description',
+          urgent: urgent,
         ),
       );
       return;
@@ -1034,6 +1275,31 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       store.fail('Inspection non accessible.', 403);
     }
     return _attachment(item['photo_id'] as String);
+  }
+
+  /// Archives the found items nobody claimed within the delay. A rule of the
+  /// module, run when a housekeeping user opens it: no client mutation id.
+  Future<int> archiveUnclaimed() async {
+    var archived = 0;
+    await store.change((s) {
+      _principal(s);
+      archived = archiveExpiredLostItems(s, clock()).length;
+    });
+    return archived;
+  }
+
+  /// Photo of a problem report: for the supervisor or the reporter.
+  Future<String> issuePhoto(String issueId, String photoId) async {
+    final s = await store.readState();
+    final actor = _principal(s);
+    final issue = issuesOf(s).where((i) => i['id'] == issueId).firstOrNull;
+    if (issue == null || !(issue['photos'] as List).contains(photoId)) {
+      store.fail('Aucune photo pour ce signalement.', 404);
+    }
+    if (actor['role'] != 'supervisor' && issue['reported_by'] != actor['id']) {
+      store.fail('Signalement non accessible.', 403);
+    }
+    return _attachment(photoId);
   }
 
   /// Photo of a found item: for the supervisor or the person who found it.

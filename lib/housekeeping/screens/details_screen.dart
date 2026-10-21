@@ -11,13 +11,14 @@ import '../models/room.dart';
 import 'assign_task_screen.dart';
 import 'inspection_history_screen.dart';
 import 'inspection_screen.dart';
+import 'issues_screen.dart';
+import 'report_issue_screen.dart';
 import 'task_photo_screen.dart';
 import '../custom/add_room_task_dialog.dart';
 import '../custom/cleaning_timer_card.dart';
 import '../services/auto_assignment.dart';
 import '../custom/draft_guard.dart';
 import '../custom/lost_item_dialog.dart';
-import '../custom/report_problem_dialog.dart';
 import '../custom/room_qr.dart';
 import '../custom/text_prompt_dialog.dart';
 
@@ -105,9 +106,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Future<void> report() async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => ReportProblemDialog(data: widget.data, room: widget.room),
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReportIssueScreen(data: widget.data, room: widget.room),
+      ),
     );
     if (mounted && saved == true) {
       showFeedback(context, 'Problème signalé à la maintenance');
@@ -538,9 +541,23 @@ class _DetailsScreenState extends State<DetailsScreen> {
               ),
             ],
             if (room.status == RoomStatus.maintenance)
-              const Text(
-                'Chambre indisponible pendant l’intervention de maintenance.',
+              Text(
+                data.resolvedIssueOf(room) == null
+                    ? 'Chambre hors service pendant l’intervention de maintenance.'
+                    : 'Intervention terminée. Remettez la chambre à nettoyer pour la rendre aux clients.',
               ),
+            if (data.resolvedIssueOf(room) case final issue?) ...[
+              const SizedBox(height: 12),
+              NovaButton(
+                'Remettre à nettoyer',
+                onPressed: saving
+                    ? null
+                    : () => action(
+                        () => data.bringBack(issue),
+                        'Chambre remise à nettoyer',
+                      ),
+              ),
+            ],
             if (data.canReport(room)) ...[
               const SizedBox(height: 12),
               OutlinedButton.icon(
@@ -555,6 +572,22 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 onPressed: saving ? null : lostItem,
                 icon: const Icon(Icons.search, size: 18),
                 label: const Text('Objet trouvé'),
+              ),
+            ],
+            if (data.openIssuesOf(room.number).isNotEmpty) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        IssuesScreen(data: data, roomNumber: room.number),
+                  ),
+                ),
+                icon: const Icon(Icons.report_outlined),
+                label: Text(
+                  'Signalements en cours · ${data.openIssuesOf(room.number).length}',
+                ),
               ),
             ],
             if (data.inspectionsOf(room.number).isNotEmpty) ...[

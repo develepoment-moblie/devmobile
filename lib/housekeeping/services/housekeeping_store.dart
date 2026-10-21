@@ -9,6 +9,7 @@ import '../../shared/services/app_session.dart';
 import '../models/task_schema.dart';
 import 'app_exception.dart';
 import 'housekeeping_seed.dart';
+import 'issue_rules.dart';
 import 'local_attachment_store.dart';
 import 'local_session_store.dart';
 
@@ -16,7 +17,7 @@ import 'local_session_store.dart';
 // step to [migrate] for every change; never edit a step already pushed.
 final housekeepingSchema = ModuleSchema(
   module: 'housekeeping',
-  version: 4,
+  version: 5,
   migrate: (tx, from, to) async {
     if (from < 1) {
       await tx.execute('''CREATE TABLE housekeeping_rooms (
@@ -138,6 +139,76 @@ final housekeepingSchema = ModuleSchema(
         'ALTER TABLE housekeeping_cleanings ADD COLUMN inspection_rounds INTEGER NOT NULL DEFAULT 0',
       );
     }
+    if (from < 5) {
+      // Problem reports with their photos and optional voice note (a file in
+      // the app's folder: only its relative path is stored).
+      await tx.execute('''CREATE TABLE housekeeping_issues (
+        id TEXT PRIMARY KEY, room_number TEXT NOT NULL,
+        category TEXT NOT NULL CHECK(category IN ('climatisation','eclairage','plomberie','television','mobilier','autre')),
+        description TEXT NOT NULL,
+        priority TEXT NOT NULL CHECK(priority IN ('low','normal','high','urgent')),
+        out_of_service INTEGER NOT NULL CHECK(out_of_service IN (0,1)),
+        status TEXT NOT NULL CHECK(status IN ('open','resolved','closed')),
+        reported_by TEXT NOT NULL, reported_by_name TEXT NOT NULL,
+        reported_at TEXT NOT NULL, resolved_at TEXT, closed_at TEXT,
+        closed_by_name TEXT, voice_path TEXT,
+        voice_seconds INTEGER CHECK(voice_seconds BETWEEN 1 AND 60),
+        version INTEGER NOT NULL)''');
+      await tx.execute('''CREATE TABLE housekeeping_issue_photos (
+        issue_id TEXT NOT NULL
+          REFERENCES housekeeping_issues(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL, photo_id TEXT NOT NULL,
+        PRIMARY KEY(issue_id, position))''');
+      // Found items: status flow and full history (contact attempts...).
+      await tx.execute(
+        "ALTER TABLE housekeeping_lost_items ADD COLUMN status TEXT NOT NULL DEFAULT 'found' "
+        "CHECK(status IN ('found','notified','returned','archived'))",
+      );
+      await tx.execute(
+        'ALTER TABLE housekeeping_lost_items ADD COLUMN archived_at TEXT',
+      );
+      await tx.execute(
+        "UPDATE housekeeping_lost_items SET status = 'returned' WHERE returned_at IS NOT NULL",
+      );
+      await tx.execute('''CREATE TABLE housekeeping_lost_item_events (
+        id TEXT PRIMARY KEY,
+        item_id TEXT NOT NULL
+          REFERENCES housekeeping_lost_items(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('found','notified','returned','archived')),
+        at TEXT NOT NULL, actor_id TEXT, actor_name TEXT NOT NULL,
+        channel TEXT CHECK(channel IS NULL OR channel IN ('phone','email','sms','inPerson')),
+        message TEXT)''');
+      await tx.execute('''INSERT INTO housekeeping_lost_item_events
+        (id, item_id, kind, at, actor_id, actor_name)
+        SELECT 'found-' || id, id, 'found', found_at, found_by, found_by_name
+        FROM housekeeping_lost_items''');
+      await tx.execute('''INSERT INTO housekeeping_lost_item_events
+        (id, item_id, kind, at, actor_name, message)
+        SELECT 'returned-' || id, id, 'returned', returned_at, 'Gouvernante',
+          'Rendu à ' || returned_to
+        FROM housekeeping_lost_items WHERE returned_at IS NOT NULL''');
+      // Module settings, e.g. the archive delay of found items.
+      await tx.execute(
+        '''CREATE TABLE housekeeping_settings (
+        key TEXT PRIMARY KEY, value TEXT NOT NULL, version INTEGER NOT NULL)''',
+      );
+      // Rooms already in maintenance get a report to follow them up.
+      if (from >= 1) {
+        final now = DateTime.now();
+        for (final room in await tx.query(
+          'housekeeping_rooms',
+          where: "status = 'maintenance'",
+        )) {
+          final issue = legacyIssue({
+            'number': room['number'],
+            'note': room['note'],
+            'urgent': room['urgent'] == 1,
+          }, now)..remove('photos');
+          issue['out_of_service'] = 1;
+          await tx.insert('housekeeping_issues', issue);
+        }
+      }
+    }
     // A new install gets its starting data once every table exists.
     if (from < 1) {
       await HousekeepingStore._write(tx, housekeepingSeedState());
@@ -173,6 +244,8 @@ Map<String, dynamic> housekeepingSeedState({
       'mutations': <dynamic>[],
       'inspections': <dynamic>[],
       'inspectionRules': <String, dynamic>{},
+      'issues': <dynamic>[],
+      'settings': <String, dynamic>{},
     };
   }
   final seed = jsonDecode(housekeepingSeedJson) as Map<String, dynamic>;
@@ -203,6 +276,12 @@ Map<String, dynamic> housekeepingSeedState({
     'mutations': <dynamic>[],
     'inspections': <dynamic>[],
     'inspectionRules': <String, dynamic>{},
+    'issues': [
+      for (final room in seed['rooms'] as List)
+        if (room['status'] == 'maintenance')
+          legacyIssue(room as Map<String, dynamic>, DateTime.now()),
+    ],
+    'settings': <String, dynamic>{},
   };
 }
 
@@ -359,13 +438,15 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
         ))
           Map<String, dynamic>.from(row),
       ],
-      'lostItems': [
-        for (final row in await db.query(
-          'housekeeping_lost_items',
-          orderBy: 'found_at DESC',
-        ))
-          Map<String, dynamic>.from(row),
-      ],
+      'lostItems': await _readLostItems(db),
+      'issues': await _readIssues(db),
+      'settings': {
+        for (final row in await db.query('housekeeping_settings'))
+          row['key'] as String: {
+            'value': row['value'],
+            'version': row['version'],
+          },
+      },
       'categoryTasks': {
         for (final row in await db.query('housekeeping_category_tasks'))
           row['category'] as String: {
@@ -430,6 +511,54 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
           },
       ],
     };
+  }
+
+  // Found items, newest first, each with its history (oldest first).
+  static Future<List<Map<String, dynamic>>> _readLostItems(
+    DatabaseExecutor db,
+  ) async {
+    final events = <Object?, List<Map<String, dynamic>>>{};
+    for (final row in await db.query(
+      'housekeeping_lost_item_events',
+      orderBy: 'at, rowid',
+    )) {
+      events
+          .putIfAbsent(row['item_id'], () => [])
+          .add(Map<String, dynamic>.from(row)..remove('item_id'));
+    }
+    return [
+      for (final row in await db.query(
+        'housekeeping_lost_items',
+        orderBy: 'found_at DESC',
+      ))
+        {...row, 'events': events[row['id']] ?? <Map<String, dynamic>>[]},
+    ];
+  }
+
+  // Problem reports, newest first, with their photo ids.
+  static Future<List<Map<String, dynamic>>> _readIssues(
+    DatabaseExecutor db,
+  ) async {
+    final photos = <Object?, List<String>>{};
+    for (final row in await db.query(
+      'housekeeping_issue_photos',
+      orderBy: 'position',
+    )) {
+      photos
+          .putIfAbsent(row['issue_id'], () => [])
+          .add(row['photo_id'] as String);
+    }
+    return [
+      for (final row in await db.query(
+        'housekeeping_issues',
+        orderBy: 'reported_at DESC',
+      ))
+        {
+          ...row,
+          'out_of_service': row['out_of_service'] == 1,
+          'photos': photos[row['id']] ?? <String>[],
+        },
+    ];
   }
 
   // Inspection rounds with their items, oldest first.
@@ -635,8 +764,88 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             'returned_at',
             'returned_to',
             'version',
+            'archived_at',
           ])
             k: item[k],
+          'status': item['status'] ?? 'found',
+        },
+    ]);
+    // An item's history only grows: insert the new steps.
+    final knownSteps = {
+      for (final row in await tx.query(
+        'housekeeping_lost_item_events',
+        columns: ['id'],
+      ))
+        row['id'],
+    };
+    for (final item in state['lostItems'] as List? ?? []) {
+      for (final e in item['events'] as List? ?? []) {
+        if (knownSteps.contains(e['id'])) continue;
+        await tx.insert('housekeeping_lost_item_events', {
+          for (final k in [
+            'id',
+            'kind',
+            'at',
+            'actor_id',
+            'actor_name',
+            'channel',
+            'message',
+          ])
+            k: e[k],
+          'item_id': item['id'],
+        });
+      }
+    }
+    await sync('housekeeping_issues', 'id', [
+      for (final i in state['issues'] as List? ?? [])
+        {
+          for (final k in [
+            'id',
+            'room_number',
+            'category',
+            'description',
+            'priority',
+            'status',
+            'reported_by',
+            'reported_by_name',
+            'reported_at',
+            'resolved_at',
+            'closed_at',
+            'closed_by_name',
+            'voice_path',
+            'voice_seconds',
+            'version',
+          ])
+            k: i[k],
+          'out_of_service': i['out_of_service'] == true ? 1 : 0,
+        },
+    ]);
+    // A report's photos are set when it is created, never changed.
+    final withPhotos = {
+      for (final row in await tx.query(
+        'housekeeping_issue_photos',
+        columns: ['issue_id'],
+        distinct: true,
+      ))
+        row['issue_id'],
+    };
+    for (final i in state['issues'] as List? ?? []) {
+      if (withPhotos.contains(i['id'])) continue;
+      final photos = i['photos'] as List? ?? [];
+      for (var n = 0; n < photos.length; n++) {
+        await tx.insert('housekeeping_issue_photos', {
+          'issue_id': i['id'],
+          'position': n,
+          'photo_id': photos[n],
+        });
+      }
+    }
+    await sync('housekeeping_settings', 'key', [
+      for (final entry in (state['settings'] as Map? ?? {}).entries)
+        {
+          'key': entry.key,
+          'value': '${entry.value['value']}',
+          'version': entry.value['version'],
         },
     ]);
     await sync('housekeeping_category_tasks', 'category', [
@@ -700,6 +909,8 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
       for (final inspection in state['inspections'] as List? ?? [])
         for (final item in inspection['items'] as List? ?? [])
           if (item['photo_id'] is String) item['photo_id'] as String,
+      for (final issue in state['issues'] as List? ?? [])
+        for (final id in issue['photos'] as List? ?? []) id as String,
     };
     for (final photo in await tx.query(
       'housekeeping_photos',

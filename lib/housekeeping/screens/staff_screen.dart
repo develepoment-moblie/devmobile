@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../models/hotel_data.dart';
+import '../models/issue.dart';
+import 'issues_screen.dart';
 import 'lost_items_screen.dart';
 import 'stats_screen.dart';
 
@@ -61,8 +63,17 @@ class StaffScreen extends StatelessWidget {
           () => navigate(3),
         ),
         (
+          'Signalements',
+          '${data.issues.where((i) => i.status == IssueStatus.open).length} en attente · ${data.issues.where((i) => i.status == IssueStatus.resolved).length} résolus',
+          Icons.report_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(builder: (_) => IssuesScreen(data: data)),
+          ),
+        ),
+        (
           'Objets trouvés',
-          '${data.lostItems.where((i) => !i.returned).length} à rendre',
+          '${data.lostItems.where((i) => i.status.kept).length} à rendre',
           Icons.search,
           () => Navigator.push(
             context,

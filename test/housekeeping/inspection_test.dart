@@ -15,6 +15,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'housekeeping_store_test.dart' show TestStaff;
 import 'photo_fixture.dart';
+import 'schema_downgrade.dart';
 import 'test_backends.dart';
 
 void main() {
@@ -453,6 +454,7 @@ void main() {
         'urgent': false,
       });
       final db = session.database.database;
+      await dropVersion5(db);
       for (final table in [
         'housekeeping_inspection_items',
         'housekeeping_inspections',
@@ -471,7 +473,7 @@ void main() {
       }, where: "module = 'housekeeping'");
       await session.database.close();
       await open();
-      expect(await session.database.versionOf('housekeeping'), 4);
+      expect(await session.database.versionOf('housekeeping'), 5);
       expect((await room('305'))['note'], 'Garder');
       expect(await inspections(), isEmpty);
       await cleanAndSubmit('305', 'sarah');

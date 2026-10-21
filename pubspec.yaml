@@ -23,6 +23,10 @@ dependencies:
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.4.2
   flutter_local_notifications: ^22.3.2
+  # housekeeping: voice note on a problem report (record, play back, app folder)
+  record: ^7.1.2
+  audioplayers: ^6.8.1
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

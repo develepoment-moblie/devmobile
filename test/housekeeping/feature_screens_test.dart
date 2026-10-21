@@ -214,11 +214,15 @@ void main() {
 
     await show(tester, LostItemsScreen(data: supervisor));
     expect(find.text('Montre'), findsOneWidget);
+    await tapText(tester, 'Montre');
     await tapText(tester, 'Rendre');
     await tester.enterText(find.byType(TextFormField), 'Mme Durand');
     await tapText(tester, 'Confirmer la restitution');
     expect(find.text('Objet restitué'), findsOneWidget);
-    await tapText(tester, 'Rendus · 1');
+    expect(find.text('Remis · Amina'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tapText(tester, 'Remis · 1');
     expect(find.textContaining('Rendu à Mme Durand'), findsOneWidget);
     for (final d in <HotelData>[supervisor, agent]) {
       d.dispose();

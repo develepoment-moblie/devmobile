@@ -10,6 +10,7 @@ import '../models/hotel_data.dart';
 import '../models/room.dart';
 import 'agent_rooms_screen.dart';
 import 'details_screen.dart';
+import 'issues_screen.dart';
 
 class AgentDashboardScreen extends StatelessWidget {
   final HotelData data;
@@ -139,6 +140,15 @@ class AgentDashboardScreen extends StatelessWidget {
             onPressed: onRooms,
             icon: const Icon(Icons.bed_outlined),
             label: const Text('Voir toutes mes chambres'),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(builder: (_) => IssuesScreen(data: data)),
+            ),
+            icon: const Icon(Icons.report_outlined),
+            label: Text('Mes signalements · ${data.issues.length}'),
           ),
           const SizedBox(height: 24),
           const Text(

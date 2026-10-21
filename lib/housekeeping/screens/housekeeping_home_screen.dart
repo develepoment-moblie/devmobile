@@ -64,6 +64,8 @@ class _CleaningWorkspaceState extends State<_CleaningWorkspace> {
     });
     try {
       await data.refresh();
+      // Found items nobody claimed within the delay are archived.
+      await data.archiveUnclaimed();
     } catch (e) {
       error = e.toString();
     } finally {

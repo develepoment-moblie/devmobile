@@ -16,7 +16,15 @@ Statut des chambres, attribution, validation, linge et produits.
       historique des inspections par chambre, score dans le journal des nettoyages
 - [x] Linge et produits d’entretien (mouvements de stock)
 - [x] Catalogue des chambres pour le Manager (création, catégorie, archive, restauration)
-- [x] Signalement d’un problème à la Maintenance depuis la fiche chambre
+- [x] Signalement d’un problème à la Maintenance depuis la fiche chambre :
+      catégorie (Climatisation, Éclairage, Plomberie, Télévision, Mobilier,
+      Autre), description, priorité (basse à urgente), jusqu’à 3 photos, note
+      vocale facultative (1 minute maximum) et option « Mettre la chambre hors
+      service » ; écran « Signalements » (Signalé → Résolu → Clôturé)
+- [x] Objets trouvés : Trouvé → Client prévenu → Remis, ou Archivé (à la main ou
+      automatiquement après un délai réglable, 30 jours par défaut) ; chaque
+      tentative de contact est notée (date, moyen, message) ; recherche, filtres
+      par statut, chambre et date ; historique complet de chaque objet
 
 ## Qui voit quoi
 
@@ -36,12 +44,26 @@ au stock. Ces règles sont locales (`services/sqlite_housekeeping.dart`).
 |---|---|
 | `GuestCheckedIn` reçu | chambre occupée |
 | `GuestCheckedOut` reçu | chambre à nettoyer + notification « Départ client » |
-| `MaintenanceRequested` reçu | chambre en maintenance (sauf si occupée) |
-| `MaintenanceResolved` reçu | chambre à nettoyer après l’intervention |
+| `MaintenanceRequested` reçu | chambre en maintenance (sauf si occupée) + signalement « Autre module » |
+| `MaintenanceResolved` reçu | signalements de la chambre résolus + notification ; la chambre reste hors service jusqu’à « Remettre à nettoyer » (gouvernante) |
 | `RoomReady` émis | à la validation du nettoyage |
 | `MaintenanceRequested` émis | « Signaler un problème » sur la fiche chambre |
 
 La liste des agents vient de `session.staff` (module Utilisateurs).
+
+Limites des événements partagés (à voir avec le module Maintenance) :
+`MaintenanceRequested` ne porte que la chambre, une description et « urgent ».
+La catégorie est ajoutée en tête de la description (`[Plomberie] …`), « urgent »
+vaut priorité haute ou urgente ; les photos, la note vocale et l’identifiant du
+signalement restent ici (`housekeeping_issues`). `MaintenanceResolved` ne porte
+que la chambre : il résout donc tous les signalements ouverts de la chambre.
+Les coordonnées des clients ne sont pas transmises au ménage (`GuestCheckedIn`
+ne donne que le nom) : « Prévenir le client » note la tentative sans appeler.
+
+Note vocale : fichier `housekeeping/voice/<uuid>.m4a` dans le dossier de
+l’application (paquets `record`, `audioplayers`, `path_provider`, permission
+`RECORD_AUDIO`) ; SQLite ne garde que ce chemin relatif. Une note enregistrée
+puis abandonnée est supprimée du téléphone.
 
 ## Structure
 
@@ -60,10 +82,12 @@ services/
   hotel_event_handlers.dart     réactions aux événements des autres modules
   room_rules.dart               petites opérations communes sur une chambre
   inspection_scoring.dart       notes, poids, score et seuil d’inspection (pur Dart)
+  issue_rules.dart              signalements, archivage des objets trouvés
+  voice_notes.dart              enregistrement et lecture des notes vocales
   evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
 ```
 
-Tables (version 4) : `housekeeping_rooms`, `housekeeping_photos`,
+Tables (version 5) : `housekeeping_rooms`, `housekeeping_photos`,
 `housekeeping_supplies`, `housekeeping_notifications`,
 `housekeeping_notification_reads`, `housekeeping_cleanings` (journal des
 nettoyages : durée, score d’inspection), `housekeeping_timer_segments`,
@@ -71,5 +95,7 @@ nettoyages : durée, score d’inspection), `housekeeping_timer_segments`,
 `housekeeping_category_estimates`, `housekeeping_floors`,
 `housekeeping_availability`, `housekeeping_mutations`,
 `housekeeping_inspections`, `housekeeping_inspection_items`,
-`housekeeping_inspection_rules`.
+`housekeeping_inspection_rules`, `housekeeping_issues`,
+`housekeeping_issue_photos`, `housekeeping_lost_item_events` (historique des
+objets trouvés), `housekeeping_settings` (délai d’archivage).
 Une nouvelle installation reçoit des chambres et un stock fictifs.

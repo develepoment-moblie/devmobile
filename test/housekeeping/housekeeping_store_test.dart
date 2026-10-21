@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'photo_fixture.dart';
+import 'schema_downgrade.dart';
 import 'test_backends.dart';
 
 // Fictional team, independent of the user_management module.
@@ -125,8 +126,12 @@ void main() {
       'housekeeping_inspections',
       'housekeeping_inspection_items',
       'housekeeping_inspection_rules',
+      'housekeeping_issues',
+      'housekeeping_issue_photos',
+      'housekeeping_lost_item_events',
+      'housekeeping_settings',
     });
-    expect(await session.database.versionOf('housekeeping'), 4);
+    expect(await session.database.versionOf('housekeeping'), 5);
     login('amina');
     final state = await backend.snapshot();
     expect((state['rooms'] as List), hasLength(16));
@@ -197,6 +202,7 @@ void main() {
         extra: {'employeeId': 'sarah', 'note': 'Avant midi', 'urgent': true},
       );
       final db = session.database.database;
+      await dropVersion5(db);
       for (final table in [
         'housekeeping_cleanings',
         'housekeeping_lost_items',
@@ -219,7 +225,7 @@ void main() {
         'version': 1,
       }, where: "module = 'housekeeping'");
       await reopen();
-      expect(await session.database.versionOf('housekeeping'), 4);
+      expect(await session.database.versionOf('housekeeping'), 5);
       final kept = await room('305');
       expect((kept['employeeId'], kept['note']), ('sarah', 'Avant midi'));
       expect((kept['stayover'], kept['feedback']), (false, null));
@@ -237,6 +243,7 @@ void main() {
       extra: {'employeeId': 'sarah', 'note': 'VIP', 'urgent': true},
     );
     final db = session.database.database;
+    await dropVersion5(db);
     for (final table in [
       'housekeeping_timer_segments',
       'housekeeping_category_estimates',
@@ -263,7 +270,7 @@ void main() {
       'version': 2,
     }, where: "module = 'housekeeping'");
     await reopen();
-    expect(await session.database.versionOf('housekeeping'), 4);
+    expect(await session.database.versionOf('housekeeping'), 5);
     final kept = await room('305');
     expect((kept['employeeId'], kept['priority']), ('sarah', 'normal'));
     expect((await store.readState())['cleanings'], hasLength(1));
@@ -584,7 +591,8 @@ void main() {
     expect((await room('305'))['status'], 'maintenance');
     session.events.emit(const MaintenanceResolved('305'));
     await settle();
-    expect((await room('305'))['status'], 'dirty');
+    // Out of service until the supervisor brings it back to cleaning.
+    expect((await room('305'))['status'], 'maintenance');
 
     login('sarah');
     await expectLater(

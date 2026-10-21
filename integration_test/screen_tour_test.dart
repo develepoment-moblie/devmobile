@@ -131,8 +131,17 @@ void main() {
     await back();
     await tap(find.text('Chambre 112'));
     await shot('room_112_occupied');
+    await tap(find.text('Signaler un problème'));
+    await shot('report_issue');
+    await back();
     await back();
     await tap(find.text('Accueil').last);
+    await tap(find.text('Signalements'));
+    await shot('issues');
+    await tap(find.text('Chambre 224 · Autre'));
+    await shot('issue_detail');
+    await back();
+    await back();
     await tap(find.text('Objets trouvés'));
     await shot('lost_items');
     await back();

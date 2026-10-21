@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../shared/services/app_events.dart';
 import 'housekeeping_store.dart';
+import 'issue_rules.dart';
 import 'room_rules.dart';
 
 // How housekeeping reacts to the other modules (see lib/shared/services/app_events.dart).
@@ -60,12 +61,29 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
     _apply(store, (state) {
       final room = activeRoom(state, e.roomNumber);
       if (room == null || room['status'] == 'maintenance') return;
-      if (room['status'] != 'occupied') {
+      final outOfService = room['status'] != 'occupied';
+      if (outOfService) {
         room['status'] = 'maintenance';
         resetCleaning(room);
         dropOpenCleaning(state, e.roomNumber);
         room['note'] = e.description;
       }
+      // Another module's report: followed up in Signalements like ours.
+      issuesOf(state).insert(
+        0,
+        newIssue(
+          roomNumber: e.roomNumber,
+          category: 'autre',
+          description: e.description.length > 300
+              ? e.description.substring(0, 300)
+              : e.description,
+          priority: e.urgent ? 'urgent' : 'normal',
+          outOfService: outOfService,
+          reportedBy: 'system',
+          reportedByName: 'Autre module',
+          at: DateTime.now(),
+        ),
+      );
       addHistory(room, 'Problème signalé : ${e.description}');
       addNotification(
         state,
@@ -77,18 +95,22 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
       bumpVersion(room);
     });
   }),
+  // The event names only the room: every open report of the room is resolved.
+  // The room stays out of service until the supervisor brings it back to
+  // cleaning ("Remettre à nettoyer").
   events.on<MaintenanceResolved>().listen(
     (e) => _apply(store, (state) {
       final room = activeRoom(state, e.roomNumber);
-      if (room == null || room['status'] != 'maintenance') return;
-      room['status'] = 'dirty';
-      resetCleaning(room);
-      room['note'] = 'Nettoyage après intervention';
-      addHistory(room, 'Intervention terminée · chambre à nettoyer');
+      if (room == null) return;
+      if (resolveIssues(state, e.roomNumber, DateTime.now()) == 0) return;
+      final outOfService = room['status'] == 'maintenance';
+      addHistory(room, 'Intervention terminée (Maintenance)');
       addNotification(
         state,
         title: 'Maintenance terminée',
-        message: 'Chambre ${e.roomNumber} à nettoyer après l’intervention.',
+        message: outOfService
+            ? 'Chambre ${e.roomNumber} : intervention terminée. Remettez-la à nettoyer depuis Signalements.'
+            : 'Chambre ${e.roomNumber} : intervention terminée.',
         roomNumber: e.roomNumber,
         audience: 'supervisor',
       );

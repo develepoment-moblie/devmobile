@@ -8,9 +8,12 @@ import '../services/auto_assignment.dart';
 import '../services/housekeeping_backend.dart';
 import '../services/mutation_meta.dart';
 import '../services/sqlite_housekeeping.dart';
+import '../services/task_photo_picker.dart';
+import '../services/voice_notes.dart';
 import '../services/inspection_scoring.dart';
 import 'cleaning_stats.dart';
 import 'inspection.dart';
+import 'issue.dart';
 import 'lost_item.dart';
 import 'room.dart';
 import 'supply.dart';
@@ -49,6 +52,17 @@ class HotelData extends ChangeNotifier {
   final List<CleaningRecord> cleanings = [];
   final List<LostItem> lostItems = [];
   final List<Inspection> inspections = [];
+
+  /// Problem reports: all for the supervisor, their own for an agent.
+  final List<Issue> issues = [];
+
+  /// Days after which an unclaimed found item is archived.
+  int lostArchiveDays = 30;
+  int _lostArchiveVersion = 0;
+
+  /// Device services, replaced by fakes in widget tests.
+  VoiceNotes Function() createVoiceNotes = DeviceVoiceNotes.new;
+  TaskPhotoPicker Function() createPhotoPicker = NativeTaskPhotoPicker.new;
   final Map<String, InspectionRules> inspectionRules = {};
   InspectionRules rulesFor(String category) =>
       inspectionRules[category] ?? const InspectionRules();
@@ -238,6 +252,14 @@ class HotelData extends ChangeNotifier {
         for (final item in json['lostItems'] as List? ?? [])
           LostItem.fromMap(item as Map),
       ]);
+    issues
+      ..clear()
+      ..addAll([
+        for (final i in json['issues'] as List? ?? []) Issue.fromMap(i as Map),
+      ]);
+    final archive = json['lostArchive'] as Map?;
+    lostArchiveDays = archive?['days'] as int? ?? 30;
+    _lostArchiveVersion = archive?['version'] as int? ?? 0;
     inspections
       ..clear()
       ..addAll([
@@ -474,8 +496,11 @@ class HotelData extends ChangeNotifier {
   }
 
   /// The supervisor or the assigned agent reports a problem to maintenance.
-  bool canReport(Room room) =>
-      room.status != RoomStatus.maintenance && (isSupervisor || canClean(room));
+  bool canReport(Room room) => isSupervisor || canClean(room);
+
+  /// Only a free or dirty room can be taken out of service.
+  bool canTakeOutOfService(Room room) =>
+      room.status == RoomStatus.ready || room.status == RoomStatus.dirty;
 
   Future<void> reportProblem(Room room, String description, bool urgent) =>
       _remote('/v1/rooms/${room.number}/report', {
@@ -483,6 +508,67 @@ class HotelData extends ChangeNotifier {
         'description': description,
         'urgent': urgent,
       });
+
+  Future<void> reportIssue(
+    Room room, {
+    required IssueCategory category,
+    required String description,
+    required IssuePriority priority,
+    required bool outOfService,
+    List<Uint8List> photos = const [],
+    String? voicePath,
+    int? voiceSeconds,
+  }) => _remote('/v1/rooms/${room.number}/report', {
+    'version': room.version,
+    'category': category.name,
+    'description': description,
+    'priority': priority.name,
+    'outOfService': outOfService,
+    'photos': [for (final photo in photos) base64Encode(photo)],
+    'voicePath': ?voicePath,
+    if (voicePath != null) 'voiceSeconds': voiceSeconds,
+  });
+
+  /// Reports of [number] still followed up, newest first.
+  List<Issue> openIssuesOf(String number) => [
+    for (final i in issues)
+      if (i.roomNumber == number && i.status != IssueStatus.closed) i,
+  ];
+
+  /// The resolved report that lets the supervisor bring [room] back.
+  Issue? resolvedIssueOf(Room room) =>
+      isSupervisor && room.status == RoomStatus.maintenance
+      ? issues
+            .where(
+              (i) =>
+                  i.roomNumber == room.number &&
+                  i.status == IssueStatus.resolved,
+            )
+            .firstOrNull
+      : null;
+
+  bool canBringBack(Issue issue) =>
+      isSupervisor &&
+      issue.status == IssueStatus.resolved &&
+      rooms.any(
+        (r) =>
+            r.number == issue.roomNumber && r.status == RoomStatus.maintenance,
+      );
+
+  /// "Remettre à nettoyer": the room leaves maintenance for a cleaning.
+  Future<void> bringBack(Issue issue) =>
+      _remote('/v1/issues/${issue.id}/bring-back', {'version': issue.version});
+
+  Future<void> closeIssue(Issue issue) =>
+      _remote('/v1/issues/${issue.id}/close', {'version': issue.version});
+
+  Future<Uint8List> issuePhoto(Issue issue, String photoId) async {
+    final backend = api;
+    if (backend is SqliteHousekeeping) {
+      return base64Decode(await backend.issuePhoto(issue.id, photoId));
+    }
+    throw const HousekeepingException('Photos indisponibles.');
+  }
 
   // --------------------------------------------------------- stock items
   Future<void> createSupply({
@@ -547,6 +633,40 @@ class HotelData extends ChangeNotifier {
     '/v1/lost/${item.id}/return',
     {'version': item.version, 'returnedTo': returnedTo},
   );
+
+  /// Logs a contact attempt: the guest's details are not shared with
+  /// housekeeping, the call or message itself is made outside the app.
+  Future<void> notifyOwner(
+    LostItem item,
+    ContactChannel channel,
+    String message,
+  ) => _remote('/v1/lost/${item.id}/notify', {
+    'version': item.version,
+    'channel': channel.name,
+    'message': message,
+  });
+
+  Future<void> archiveLostItem(LostItem item) =>
+      _remote('/v1/lost/${item.id}/archive', {'version': item.version});
+
+  Future<void> setLostArchiveDays(int days) => _remote(
+    '/v1/settings/lost-archive-days/set',
+    {'version': _lostArchiveVersion, 'value': days},
+  );
+
+  /// Archives the items nobody claimed within the delay (on opening). The
+  /// rule runs only when a loaded item is overdue.
+  Future<void> archiveUnclaimed([DateTime? now]) async {
+    final limit = (now ?? DateTime.now()).subtract(
+      Duration(days: lostArchiveDays),
+    );
+    final backend = api;
+    if (backend is! SqliteHousekeeping ||
+        !lostItems.any((i) => i.status.kept && !i.foundAt.isAfter(limit))) {
+      return;
+    }
+    if (await backend.archiveUnclaimed() > 0) await refresh();
+  }
 
   Future<Uint8List> lostItemPhoto(LostItem item) async {
     final backend = api;
