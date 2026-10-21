@@ -14,6 +14,7 @@ import 'issue_rules.dart';
 import 'local_attachment_store.dart';
 import 'local_session_store.dart';
 import 'mutation_meta.dart';
+import 'notification_rules.dart';
 import 'room_rules.dart';
 
 // The housekeeping rules. Every action re-reads the state and checks role,
@@ -27,7 +28,8 @@ import 'room_rules.dart';
 // /v1/requests/<new|id>/<create|approve|prepare|deliver|refuse>,
 // /v1/minibar/<new|id|room>/<record|correct|compensate|post|restock>
 // (see InventoryRules),
-// /v1/notifications/read. approve and refuse take optional inspection
+// /v1/notification-prefs/<category>/set, /v1/notifications/read.
+// approve and refuse take optional inspection
 // ratings (see _inspect); report creates a problem report (housekeeping_issues).
 // Every body carries mutationId (UUID v4) and clientTimestamp; a repeated
 // mutationId is ignored. Times are taken from [clock] inside the
@@ -76,8 +78,19 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
         )
         .toList();
     final reads = ((s['reads'] as Map)[actor['id']] as List?) ?? [];
+    // Categories the user switched off are not shown at all.
+    final muted = mutedCategories(s, actor['id']);
+    s['notificationPrefs'] = {
+      for (final p in s['notificationPrefs'] as List? ?? [])
+        if (p['user_id'] == actor['id'])
+          p['category']: {'enabled': p['enabled'], 'version': p['version']},
+    };
     s['notifications'] = (s['notifications'] as List)
-        .where((n) => _sees(n as Map, actor))
+        .where(
+          (n) =>
+              _sees(n as Map, actor) &&
+              !muted.contains(n['category'] ?? categoryForTitle(n['title'])),
+        )
         .map((n) => {...n as Map, 'read': reads.contains(n['id'])})
         .toList();
     // Inventory: agents see their own requests, movements and consumptions.
@@ -249,6 +262,32 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     final parts = path.split('/');
     require(parts.length == 5 && parts[1] == 'v1', 'Action inconnue.');
     final family = parts[2], key = parts[3], action = parts[4];
+    if (family == 'notification-prefs') {
+      require(action == 'set', 'Action inconnue.');
+      require(
+        notificationCategoryLabels.containsKey(key),
+        'Catégorie inconnue.',
+      );
+      require(body['enabled'] is bool, 'Réglage invalide.');
+      final prefs =
+          s['notificationPrefs'] as List? ?? (s['notificationPrefs'] = []);
+      final current = prefs
+          .where((p) => p['user_id'] == actor['id'] && p['category'] == key)
+          .firstOrNull;
+      require(
+        body['version'] == ((current?['version'] as int?) ?? 0),
+        'Ce réglage a changé. Actualisez.',
+        409,
+      );
+      prefs.remove(current);
+      prefs.add({
+        'user_id': actor['id'],
+        'category': key,
+        'enabled': body['enabled'],
+        'version': ((current?['version'] as int?) ?? 0) + 1,
+      });
+      return;
+    }
     if (InventoryRules(
       s,
       actor,
@@ -881,6 +920,21 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
           now,
           newId,
         );
+        if (body['urgent'] == true) {
+          addNotification(
+            s,
+            title: 'Tâche urgente',
+            message: [
+              'Chambre $key à traiter en priorité',
+              if ((body['note'] as String).trim().isNotEmpty)
+                (body['note'] as String).trim(),
+            ].join(' · '),
+            roomNumber: key,
+            audience: 'agent',
+            recipient: body['employeeId'] as String,
+            category: 'tasks',
+          );
+        }
       case 'approve':
         require(supervisor, 'Validation réservée à la gouvernante.', 403);
         require(row['cleaning'] == 'review', 'Inspection non disponible.');
@@ -961,6 +1015,8 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
           ].join(' · '),
           roomNumber: key,
           audience: 'agent',
+          recipient: row['employeeId'] as String?,
+          category: 'tasks',
         );
       default:
         require(
@@ -1071,6 +1127,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
             'message': 'Chambre $key prête pour inspection.',
             'roomNumber': key,
             'audience': 'supervisor',
+            'category': 'inspection',
           });
         } else {
           store.fail('Action inconnue.');
@@ -1341,6 +1398,24 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       archived = archiveExpiredLostItems(s, clock()).length;
     });
     return archived;
+  }
+
+  /// Notifies the supervisor of cleanings past their time (once each) and
+  /// returns when the next running cleaning will be late. A rule of the
+  /// module, run when the data changes: no client mutation id. Writes
+  /// only when something is late.
+  Future<DateTime?> checkLate() async {
+    final s = await store.readState();
+    _principal(s);
+    final now = clock();
+    final preview = checkLateCleanings(s, now);
+    if (!preview.changed) return preview.next;
+    DateTime? next;
+    await store.change((s) {
+      _principal(s);
+      next = checkLateCleanings(s, clock()).next;
+    });
+    return next;
   }
 
   /// Photo of a problem report: for the supervisor or the reporter.

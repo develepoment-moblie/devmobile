@@ -473,7 +473,7 @@ void main() {
       }, where: "module = 'housekeeping'");
       await session.database.close();
       await open();
-      expect(await session.database.versionOf('housekeeping'), 6);
+      expect(await session.database.versionOf('housekeeping'), 7);
       expect((await room('305'))['note'], 'Garder');
       expect(await inspections(), isEmpty);
       await cleanAndSubmit('305', 'sarah');

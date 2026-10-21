@@ -4,7 +4,11 @@ import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../models/hotel_data.dart';
 import '../models/issue.dart';
+import 'dashboard_screen.dart';
 import 'issues_screen.dart';
+import '../models/dashboard_data.dart';
+import '../services/housekeeping_store.dart';
+import '../services/sqlite_housekeeping.dart';
 import 'lost_items_screen.dart';
 import 'stats_screen.dart';
 
@@ -38,6 +42,15 @@ class StaffScreen extends StatelessWidget {
       ),
       const SizedBox(height: 12),
       ...[
+        if (data.api case SqliteHousekeeping(
+          store: final HousekeepingStore store,
+        ))
+          (
+            'Tableau de bord',
+            'Chambres, agents et signalements en direct',
+            Icons.space_dashboard_outlined,
+            () => openDashboard(context, store),
+          ),
         (
           'Chambres',
           '${data.rooms.length} chambres',
@@ -124,4 +137,15 @@ class StaffScreen extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// Opens the live dashboard; its controller lives as long as the screen.
+Future<void> openDashboard(BuildContext context, HousekeepingStore store) {
+  final dashboard = DashboardData(store);
+  return Navigator.push(
+    context,
+    MaterialPageRoute<void>(
+      builder: (_) => DashboardScreen(dashboard: dashboard),
+    ),
+  ).whenComplete(dashboard.dispose);
 }

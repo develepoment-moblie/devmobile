@@ -43,7 +43,6 @@ class _HousekeepingWorkspaceState extends State<HousekeepingWorkspace>
   late final _watcher = widget.alerts == null
       ? null
       : AlertWatcher(widget.alerts!);
-  Timer? timer;
   void _watch() => _watcher?.check(
     widget.agent ? data.personalNotifications : data.notifications,
   );
@@ -69,15 +68,14 @@ class _HousekeepingWorkspaceState extends State<HousekeepingWorkspace>
       if (mounted) setState(() {});
     };
     _watch();
-    // Picks up changes made by other modules' events.
-    timer = Timer.periodic(const Duration(seconds: 5), (_) => _refresh());
+    // No polling: HotelData re-reads after every saved change, including
+    // other modules' events (the store's change signal).
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     data.onChanged = null;
-    timer?.cancel();
     _tabFade.dispose();
     super.dispose();
   }

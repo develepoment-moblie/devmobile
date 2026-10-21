@@ -654,7 +654,7 @@ void main() {
     }, where: "module = 'housekeeping'");
     await session.database.close();
     await open();
-    expect(await session.database.versionOf('housekeeping'), 6);
+    expect(await session.database.versionOf('housekeeping'), 7);
     expect((await supply('sheets'))['category'], 'linge');
     expect((await supply('soap'))['category'], 'accueil');
     expect((await supply('cleaner'))['category'], 'entretien');

@@ -39,7 +39,7 @@ class _CleaningWorkspace extends StatefulWidget {
 class _CleaningWorkspaceState extends State<_CleaningWorkspace> {
   late final data = HotelData(
     api: SqliteHousekeeping(widget.store, events: widget.session.events),
-  );
+  )..watchLate = true;
   bool loading = true;
   String? error;
   // One instance for the app: the plugin is initialised once.

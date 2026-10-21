@@ -4,6 +4,7 @@ import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../models/hotel_data.dart';
 import 'details_screen.dart';
+import 'notification_prefs_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   final HotelData data;
@@ -63,6 +64,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     appBar: AppBar(
       title: const Text('Notifications'),
       actions: [
+        IconButton(
+          tooltip: 'Réglages des notifications',
+          icon: const Icon(Icons.tune),
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => NotificationPrefsScreen(data: widget.data),
+            ),
+          ),
+        ),
         IconButton(
           tooltip: 'Tout marquer comme lu',
           icon: const Icon(Icons.done_all),

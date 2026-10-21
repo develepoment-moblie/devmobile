@@ -155,6 +155,14 @@ void main() {
     await tap(find.text('Statistiques'));
     await shot('statistics');
     await back();
+    await tap(find.text('Tableau de bord'));
+    await shot('dashboard');
+    await back();
+    await tap(find.byTooltip('Notifications'));
+    await tap(find.byTooltip('Réglages des notifications'));
+    await shot('notification_settings');
+    await back();
+    await back();
     await tap(find.byTooltip('Retour à l’accueil'));
     await tester.pump(const Duration(milliseconds: 600));
     await signOut();
@@ -194,6 +202,9 @@ void main() {
     await back();
     await tap(find.textContaining('Carte du minibar'));
     await shot('manager_minibar');
+    await back();
+    await tap(find.text('Tableau de bord'));
+    await shot('manager_dashboard');
     await back();
     await back();
     await signOut();

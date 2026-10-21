@@ -23,6 +23,14 @@ Statut des chambres, attribution, validation, linge et produits.
 - [x] Demandes de fournitures des agents : demandée → approuvée → préparée →
       livrée, ou refusée ; le stock baisse à la livraison (refusée s’il manque
       du stock) ; l’agent est prévenu à chaque étape
+- [x] Notifications par catégorie (tâches urgentes et reprises, départs,
+      nettoyages à valider, stock, maintenance, retards, autres), chacun
+      choisit les siennes ; « Tâche urgente » pour l’agent attribué ;
+      « Nettoyage en retard » pour la gouvernante quand le minuteur dépasse le
+      temps prévu de la catégorie + 25 % (une fois par nettoyage)
+- [x] Tableau de bord (gouvernante, Manager) : chambres par statut, nettoyés
+      et à faire, temps moyen (minuteur), chambres par heure et score moyen
+      par agent, signalements ouverts ; mis à jour en direct
 - [x] Minibar : carte avec prix (gouvernante ou Manager), consommations par
       chambre (en attente → facturé), réassort ; « Valider et facturer » envoie
       `ExtraCharged` une seule fois par consommation ; après facturation, une
@@ -65,6 +73,12 @@ au stock. Ces règles sont locales (`services/sqlite_housekeeping.dart`).
 
 La liste des agents vient de `session.staff` (module Utilisateurs).
 
+Mise à jour en direct, sans minuterie : le magasin (`HousekeepingStore`)
+signale chaque enregistrement réussi (action d’un écran ou événement d’un
+autre module) ; `HotelData` et `DashboardData` relisent alors les données.
+Notifications du téléphone : affichées tant que l’application tourne (ouverte
+ou en arrière-plan), pas de serveur ni de notification à distance.
+
 Limites des événements partagés (à voir avec le module Maintenance) :
 `MaintenanceRequested` ne porte que la chambre, une description et « urgent ».
 La catégorie est ajoutée en tête de la description (`[Plomberie] …`), « urgent »
@@ -105,11 +119,13 @@ services/
   inspection_scoring.dart       notes, poids, score et seuil d’inspection (pur Dart)
   issue_rules.dart              signalements, archivage des objets trouvés
   inventory_rules.dart          journal du stock, blanchisserie, demandes, minibar
+  notification_rules.dart       catégories de notifications, retards
+  dashboard_queries.dart        requêtes SQL du tableau de bord
   voice_notes.dart              enregistrement et lecture des notes vocales
   evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
 ```
 
-Tables (version 6) : `housekeeping_rooms`, `housekeeping_photos`,
+Tables (version 7) : `housekeeping_rooms`, `housekeeping_photos`,
 `housekeeping_supplies`, `housekeeping_notifications`,
 `housekeeping_notification_reads`, `housekeeping_cleanings` (journal des
 nettoyages : durée, score d’inspection), `housekeeping_timer_segments`,
@@ -123,5 +139,6 @@ objets trouvés), `housekeeping_settings` (délai d’archivage),
 `housekeeping_stock_movements` (journal du stock),
 `housekeeping_laundry_batches`, `housekeeping_laundry_lines`,
 `housekeeping_supply_requests`, `housekeeping_supply_request_lines`,
-`housekeeping_minibar_consumptions`, `housekeeping_stays`.
+`housekeeping_minibar_consumptions`, `housekeeping_stays`,
+`housekeeping_notification_prefs`.
 Une nouvelle installation reçoit des chambres et un stock fictifs.

@@ -14,6 +14,9 @@ import '../services/room_catalog_backend.dart';
 import 'category_tasks_screen.dart';
 import 'floor_screen.dart';
 import 'minibar_catalog_screen.dart';
+import 'staff_screen.dart' show openDashboard;
+import '../services/housekeeping_store.dart';
+import '../services/sqlite_room_catalog.dart';
 
 // The Manager's catalog: the hotel's floors, each opening its rooms.
 class ManageRoomsScreen extends StatefulWidget {
@@ -203,6 +206,16 @@ class _ManageRoomsScreenState extends State<ManageRoomsScreen> {
                   ),
                 ],
               ),
+              if (catalog.backend case SqliteRoomCatalog(
+                store: final HousekeepingStore store,
+              )) ...[
+                const SizedBox(height: 10),
+                FilledButton.tonalIcon(
+                  onPressed: () => openDashboard(context, store),
+                  icon: const Icon(Icons.space_dashboard_outlined),
+                  label: const Text('Tableau de bord'),
+                ),
+              ],
               const SizedBox(height: 10),
               OutlinedButton.icon(
                 onPressed: () => open(MinibarCatalogScreen(catalog: catalog)),

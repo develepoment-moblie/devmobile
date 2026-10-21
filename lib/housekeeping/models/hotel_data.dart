@@ -11,6 +11,8 @@ import '../services/sqlite_housekeeping.dart';
 import '../services/task_photo_picker.dart';
 import '../services/voice_notes.dart';
 import '../services/inspection_scoring.dart';
+import '../services/local_session_store.dart';
+import '../services/notification_rules.dart';
 import 'cleaning_stats.dart';
 import 'inspection.dart';
 import 'inventory.dart';
@@ -25,6 +27,9 @@ class HotelNotification {
   final String roomNumber;
   bool read = false;
   String id = '';
+
+  /// tasks, departures, inspection, stock, maintenance, late or other.
+  String category = 'other';
   HotelNotification(this.title, this.message, this.roomNumber);
 }
 
@@ -34,11 +39,80 @@ class HotelData extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _changes?.cancel();
+    _lateTimer?.cancel();
     super.dispose();
   }
 
   final HousekeepingBackend api;
-  HotelData({required this.api});
+
+  /// Re-reads after every change saved by anyone (this screen, another
+  /// screen, another module's event): the screens update without polling.
+  /// [changes] defaults to the store's change signal.
+  HotelData({required this.api, Stream<void>? changes}) {
+    final signal =
+        changes ??
+        switch (api) {
+          SqliteHousekeeping(store: final ChangeSignal store) => store.changes,
+          _ => null,
+        };
+    _changes = signal?.listen((_) => _storeChanged());
+  }
+  StreamSubscription<void>? _changes;
+  bool _stale = false;
+
+  void _storeChanged() {
+    if (_disposed) return;
+    // A change while this controller saves: read again once it is done.
+    if (_requestActive) {
+      _stale = true;
+      return;
+    }
+    refresh().catchError((Object _) {
+      /* The banner shows the error. */
+    });
+  }
+
+  /// Checks late cleanings after each change and at the moment the next
+  /// running one becomes late (one timer, no polling). Off in tests.
+  bool watchLate = false;
+  Timer? _lateTimer;
+  bool _checkingLate = false;
+
+  Future<void> _checkLate() async {
+    final backend = api;
+    if (!watchLate || _disposed || _checkingLate) return;
+    if (backend is! SqliteHousekeeping) return;
+    _checkingLate = true;
+    try {
+      final next = await backend.checkLate();
+      _lateTimer?.cancel();
+      if (next != null && !_disposed) {
+        _lateTimer = Timer(
+          next.difference(backend.clock()) + const Duration(seconds: 1),
+          _checkLate,
+        );
+      }
+    } catch (error) {
+      debugPrint('housekeeping: contrôle des retards impossible ($error)');
+    } finally {
+      _checkingLate = false;
+    }
+  }
+
+  /// Notification switches of the signed-in user, by category.
+  final Map<String, ({bool enabled, int version})> notificationPrefs = {};
+  bool notifies(String category) =>
+      notificationPrefs[category]?.enabled ?? true;
+
+  /// The categories this user receives.
+  List<String> get notificationCategories =>
+      isSupervisor ? supervisorCategories : agentCategories;
+
+  Future<void> setNotificationPref(String category, bool enabled) => _remote(
+    '/v1/notification-prefs/$category/set',
+    {'enabled': enabled, 'version': notificationPrefs[category]?.version ?? 0},
+  );
 
   String currentUserId = '';
   String currentUser = '';
@@ -139,6 +213,7 @@ class HotelData extends ChangeNotifier {
     if (_disposed) return;
     onChanged?.call();
     notifyListeners();
+    unawaited(_checkLate());
   }
 
   int get remaining => rooms.where((r) => r.needsCleaning).length;
@@ -275,7 +350,9 @@ class HotelData extends ChangeNotifier {
                   n['roomNumber'] as String,
                 )
                 ..id = n['id'] as String
-                ..read = n['read'] as bool,
+                ..read = n['read'] as bool
+                ..category =
+                    n['category'] as String? ?? categoryForTitle(n['title']),
         ),
       );
     cleanings
@@ -319,6 +396,15 @@ class HotelData extends ChangeNotifier {
       ..addAll([
         for (final i in json['issues'] as List? ?? []) Issue.fromMap(i as Map),
       ]);
+    notificationPrefs
+      ..clear()
+      ..addAll({
+        for (final e in (json['notificationPrefs'] as Map? ?? {}).entries)
+          e.key as String: (
+            enabled: e.value['enabled'] as bool,
+            version: e.value['version'] as int,
+          ),
+      });
     final archive = json['lostArchive'] as Map?;
     lostArchiveDays = archive?['days'] as int? ?? 30;
     _lostArchiveVersion = archive?['version'] as int? ?? 0;
@@ -389,6 +475,10 @@ class HotelData extends ChangeNotifier {
     } finally {
       _requestActive = false;
       changed();
+      if (_stale) {
+        _stale = false;
+        _storeChanged();
+      }
     }
   }
 

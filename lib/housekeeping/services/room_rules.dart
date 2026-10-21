@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'inspection_scoring.dart';
+import 'notification_rules.dart';
 
 // Small state changes shared by user actions and by other modules' events.
 // They work on the persisted room shape read by HousekeepingStore.
@@ -35,6 +36,7 @@ void addNotification(
   required String roomNumber,
   String audience = 'all',
   String? recipient,
+  String? category,
 }) => (state['notifications'] as List).insert(0, {
   'id':
       '${roomNumber.isEmpty ? 'stock' : roomNumber}-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}',
@@ -43,6 +45,7 @@ void addNotification(
   'roomNumber': roomNumber,
   'audience': audience,
   'recipient': recipient,
+  'category': category ?? categoryForTitle(title),
 });
 
 Map<String, dynamic>? activeRoom(Map<String, dynamic> state, String number) =>

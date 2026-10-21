@@ -68,18 +68,20 @@ Features:
 - laundry tracking (sent → returned with damaged/lost), agents' supply requests (requested → approved → prepared → delivered, or refused), minibar consumptions posted once to billing through `ExtraCharged`, corrections after posting as compensating entries;
 - problem reports: category, description, priority, up to 3 photos, optional voice note (60 s), optional "out of service"; a "Signalements" screen (reported → resolved → closed); after `MaintenanceResolved` the supervisor brings the room back to cleaning;
 - lost and found: found → guest notified → returned, or archived (by hand or after a configurable delay); every contact attempt logged; search and filters; full history per item;
-- notifications, plus Android notifications;
+- notifications by category with per-user switches (urgent task, sent back, departure, ready for inspection, low stock, maintenance, late cleaning), shown as Android notifications while the app runs;
+- a live dashboard for the supervisor and the Manager (rooms by status, cleaned vs pending, average timer time, rooms per hour and inspection score per agent, open issues), built on SQL aggregates;
+- no polling: the store signals every saved change and the controllers re-read;
 - statistics from a cleaning log;
 - QR code per room door and a scanner;
 - Manager floor view (floors → room grid → room sheet), creating many rooms at once, archive and restore;
 - reacting to other modules' events.
 
-Database: `housekeeping_*` tables, at version 6 (rooms, photos, supplies, notifications, cleaning log, lost items, category tasks, floors, and more).
+Database: `housekeeping_*` tables, at version 7 (rooms, photos, supplies, notifications, cleaning log, lost items, category tasks, floors, and more).
 
 Also done: a cleaning timer per room (start, pause, resume, stop; survives restarts) and automatic assignment of rooms to housekeepers, as a separate testable module.
 
 ## Quality and conventions
-- **Tests:** about 130 automated tests covering business rules on a real SQLite database, widget tests (some use an in-memory store that runs the real rules) and screenshot (golden) tests. On-phone check: `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screen_tour_test.dart -d <device>`.
+- **Tests:** about 145 automated tests covering business rules on a real SQLite database, widget tests (some use an in-memory store that runs the real rules) and screenshot (golden) tests. On-phone check: `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screen_tour_test.dart -d <device>`.
 - **Before every commit:** `flutter analyze` must report no issues and `flutter test` must pass.
 - **Design:** dark green `#183C35`, terracotta `#C66F55`, gold, Manrope font. Animations play once and respect Android's "remove animations" setting.
 - **Build options:** `--dart-define=HOUSEKEEPING_SAMPLE_DATA=false` makes a new install start with an empty hotel.

@@ -13,12 +13,13 @@ import 'inventory_rules.dart';
 import 'issue_rules.dart';
 import 'local_attachment_store.dart';
 import 'local_session_store.dart';
+import 'notification_rules.dart';
 
 // The module's tables, all prefixed housekeeping_. Bump [version] and add a
 // step to [migrate] for every change; never edit a step already pushed.
 final housekeepingSchema = ModuleSchema(
   module: 'housekeeping',
-  version: 6,
+  version: 7,
   migrate: (tx, from, to) async {
     if (from < 1) {
       await tx.execute('''CREATE TABLE housekeeping_rooms (
@@ -283,6 +284,30 @@ final housekeepingSchema = ModuleSchema(
         guest_name TEXT NOT NULL, checked_in_at TEXT NOT NULL,
         checked_out_at TEXT)''');
     }
+    if (from < 7) {
+      // Notification categories, each user's switches, late cleanings.
+      await tx.execute(
+        "ALTER TABLE housekeeping_notifications ADD COLUMN category TEXT NOT NULL DEFAULT 'other' "
+        "CHECK(category IN ('tasks','departures','inspection','stock','maintenance','late','other'))",
+      );
+      for (final row in await tx.query('housekeeping_notifications')) {
+        await tx.update(
+          'housekeeping_notifications',
+          {'category': categoryForTitle(row['title'])},
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+      }
+      await tx.execute('''CREATE TABLE housekeeping_notification_prefs (
+        user_id TEXT NOT NULL,
+        category TEXT NOT NULL CHECK(category IN ('tasks','departures','inspection','stock','maintenance','late','other')),
+        enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+        version INTEGER NOT NULL,
+        PRIMARY KEY(user_id, category))''');
+      await tx.execute(
+        'ALTER TABLE housekeeping_cleanings ADD COLUMN late_notified_at TEXT',
+      );
+    }
     // A new install gets its starting data once every table exists.
     if (from < 1) {
       await HousekeepingStore._write(tx, housekeepingSeedState());
@@ -325,6 +350,7 @@ Map<String, dynamic> housekeepingSeedState({
       'requests': <dynamic>[],
       'minibar': <dynamic>[],
       'stays': <dynamic>[],
+      'notificationPrefs': <dynamic>[],
     };
   }
   final seed = jsonDecode(housekeepingSeedJson) as Map<String, dynamic>;
@@ -388,15 +414,22 @@ Map<String, dynamic> housekeepingSeedState({
     'requests': <dynamic>[],
     'minibar': <dynamic>[],
     'stays': <dynamic>[],
+    'notificationPrefs': <dynamic>[],
   };
 }
 
 /// Reads and writes the housekeeping tables for the signed-in user.
 /// Every change runs in one SQLite transaction: an error leaves no partial write.
 /// Permissions are local application rules (see SqliteHousekeeping).
-class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
+class HousekeepingStore
+    implements LocalSessionStore, LocalAttachmentStore, ChangeSignal {
   final AppSession session;
   Future<void> _pending = Future.value();
+  final _changes = StreamController<void>.broadcast();
+
+  /// Fires after every saved change: the screens re-read, no polling.
+  @override
+  Stream<void> get changes => _changes.stream;
   final _ownReports = <String>[];
   HousekeepingStore(this.session);
 
@@ -435,18 +468,24 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
         action(state);
         await _write(tx, state);
       });
+      _changes.add(null);
     });
   }
 
   /// A change made on behalf of another module (an event), without a user.
   Future<void> systemChange(void Function(Map<String, dynamic>) action) =>
-      _queue(
-        () => _db.transaction((tx) async {
+      _queue(() async {
+        await _db.transaction((tx) async {
           final state = await _read(tx, const []);
           action(state);
           await _write(tx, state);
-        }),
-      );
+        });
+        _changes.add(null);
+      });
+
+  /// A read-only query on the module's tables, queued like the changes.
+  Future<T> query<T>(Future<T> Function(DatabaseExecutor db) read) =>
+      _queue(() => read(_db));
 
   @override
   Future<String> readAttachment(String id) => _queue(() async {
@@ -537,6 +576,7 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             for (final k in ['id', 'title', 'message', 'audience']) k: row[k],
             'roomNumber': row['room_number'],
             'recipient': row['recipient_id'],
+            'category': row['category'],
           },
       ],
       'reads': reads,
@@ -576,6 +616,10 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
           orderBy: 'recorded_at DESC, rowid DESC',
         ))
           Map<String, dynamic>.from(row),
+      ],
+      'notificationPrefs': [
+        for (final row in await db.query('housekeeping_notification_prefs'))
+          {...row, 'enabled': row['enabled'] == 1},
       ],
       'stays': [
         for (final row in await db.query(
@@ -813,6 +857,7 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             'finished_at',
             'duration_ms',
             'inspection_score',
+            'late_notified_at',
           ])
             k: c[k],
           'inspection_rounds': c['inspection_rounds'] ?? 0,
@@ -1163,6 +1208,16 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             k: c[k],
         },
     ]);
+    // Composite key and few rows: rewritten as a whole.
+    await tx.delete('housekeeping_notification_prefs');
+    for (final pref in state['notificationPrefs'] as List? ?? []) {
+      await tx.insert('housekeeping_notification_prefs', {
+        'user_id': pref['user_id'],
+        'category': pref['category'],
+        'enabled': pref['enabled'] == true ? 1 : 0,
+        'version': pref['version'],
+      });
+    }
     await sync('housekeeping_stays', 'id', [
       for (final stay in state['stays'] as List? ?? [])
         {
@@ -1185,6 +1240,9 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
           'room_number': notifications[i]['roomNumber'],
           'position': i,
           'recipient_id': notifications[i]['recipient'],
+          'category':
+              notifications[i]['category'] ??
+              categoryForTitle(notifications[i]['title']),
         },
     ]);
     await tx.delete('housekeeping_notification_reads');
