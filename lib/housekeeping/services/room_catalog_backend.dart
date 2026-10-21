@@ -1,4 +1,5 @@
 import '../models/room.dart';
+import '../models/supply.dart';
 import 'inspection_scoring.dart';
 
 enum RoomCatalogAction {
@@ -11,6 +12,8 @@ enum RoomCatalogAction {
   setCategoryTasks,
   setCategoryEstimate,
   setInspectionRules,
+  saveMinibarItem,
+  deleteMinibarItem,
 }
 
 /// A category's default task list, applied to its new and idle rooms.
@@ -34,6 +37,9 @@ class RoomCatalogSnapshot {
 
   /// Inspection threshold and item weights per category.
   final Map<String, InspectionRules> inspectionRules;
+
+  /// The minibar catalog: items with their sale price.
+  final List<Supply> minibarItems;
   InspectionRules rulesFor(String category) =>
       inspectionRules[category] ?? const InspectionRules();
   const RoomCatalogSnapshot(
@@ -44,6 +50,7 @@ class RoomCatalogSnapshot {
     this.categoryTasks = const {},
     this.estimates = const {},
     this.inspectionRules = const {},
+    this.minibarItems = const [],
   });
 
   String floorName(int floor) => floorNames[floor] ?? 'Étage $floor';
@@ -84,6 +91,10 @@ class RoomCatalogSnapshot {
             e.value['version'] as int,
           ),
       },
+      minibarItems: [
+        for (final m in map['minibarItems'] as List? ?? [])
+          Supply.fromMap(m as Map),
+      ],
       inspectionRules: {
         for (final e in (map['inspectionRules'] as Map? ?? {}).entries)
           e.key as String: InspectionRules.fromMap(e.value as Map),

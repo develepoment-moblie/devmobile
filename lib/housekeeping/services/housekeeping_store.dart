@@ -9,6 +9,7 @@ import '../../shared/services/app_session.dart';
 import '../models/task_schema.dart';
 import 'app_exception.dart';
 import 'housekeeping_seed.dart';
+import 'inventory_rules.dart';
 import 'issue_rules.dart';
 import 'local_attachment_store.dart';
 import 'local_session_store.dart';
@@ -17,7 +18,7 @@ import 'local_session_store.dart';
 // step to [migrate] for every change; never edit a step already pushed.
 final housekeepingSchema = ModuleSchema(
   module: 'housekeeping',
-  version: 5,
+  version: 6,
   migrate: (tx, from, to) async {
     if (from < 1) {
       await tx.execute('''CREATE TABLE housekeeping_rooms (
@@ -209,6 +210,79 @@ final housekeepingSchema = ModuleSchema(
         }
       }
     }
+    if (from < 6) {
+      // Typed stock items (linen, amenities, cleaning products, minibar).
+      await tx.execute(
+        "ALTER TABLE housekeeping_supplies ADD COLUMN category TEXT NOT NULL DEFAULT 'entretien' "
+        "CHECK(category IN ('linge','accueil','entretien','minibar'))",
+      );
+      await tx.execute(
+        'ALTER TABLE housekeeping_supplies ADD COLUMN price_cents INTEGER '
+        'CHECK(price_cents IS NULL OR price_cents BETWEEN 1 AND 100000)',
+      );
+      for (final row in await tx.query('housekeeping_supplies')) {
+        await tx.update(
+          'housekeeping_supplies',
+          {'category': categoryFromName(row['name'] as String)},
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+      }
+      // A notification for one account only (supply request steps).
+      await tx.execute(
+        'ALTER TABLE housekeeping_notifications ADD COLUMN recipient_id TEXT',
+      );
+      // Every stock change: the usage log per floor and room.
+      await tx.execute('''CREATE TABLE housekeeping_stock_movements (
+        id TEXT PRIMARY KEY, supply_id TEXT NOT NULL, supply_name TEXT NOT NULL,
+        delta INTEGER NOT NULL, quantity INTEGER NOT NULL,
+        reason TEXT NOT NULL CHECK(reason IN ('manual','usage','laundry_out','laundry_in','laundry_damaged','laundry_lost','request','minibar_restock')),
+        room_number TEXT, floor INTEGER, actor_id TEXT NOT NULL,
+        actor_name TEXT NOT NULL, ref_id TEXT, at TEXT NOT NULL)''');
+      await tx.execute('''CREATE TABLE housekeeping_laundry_batches (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK(status IN ('sent','returned')),
+        note TEXT, sent_at TEXT NOT NULL, sent_by_name TEXT NOT NULL,
+        returned_at TEXT, returned_by_name TEXT, version INTEGER NOT NULL)''');
+      await tx.execute('''CREATE TABLE housekeeping_laundry_lines (
+        id TEXT PRIMARY KEY,
+        batch_id TEXT NOT NULL
+          REFERENCES housekeeping_laundry_batches(id) ON DELETE CASCADE,
+        supply_id TEXT NOT NULL, supply_name TEXT NOT NULL, unit TEXT NOT NULL,
+        sent INTEGER NOT NULL CHECK(sent > 0),
+        received INTEGER, damaged INTEGER, lost INTEGER,
+        position INTEGER NOT NULL)''');
+      await tx.execute('''CREATE TABLE housekeeping_supply_requests (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK(status IN ('requested','approved','prepared','delivered','refused')),
+        agent_id TEXT NOT NULL, agent_name TEXT NOT NULL, note TEXT,
+        created_at TEXT NOT NULL, approved_at TEXT, prepared_at TEXT,
+        delivered_at TEXT, refused_at TEXT, processed_by_name TEXT,
+        refusal_reason TEXT, version INTEGER NOT NULL)''');
+      await tx.execute('''CREATE TABLE housekeeping_supply_request_lines (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL
+          REFERENCES housekeeping_supply_requests(id) ON DELETE CASCADE,
+        supply_id TEXT NOT NULL, supply_name TEXT NOT NULL, unit TEXT NOT NULL,
+        requested INTEGER NOT NULL CHECK(requested > 0),
+        approved INTEGER NOT NULL CHECK(approved >= 0),
+        position INTEGER NOT NULL)''');
+      // Minibar consumptions: billed once; corrected after billing only by
+      // a compensating entry (corrects_id).
+      await tx.execute('''CREATE TABLE housekeeping_minibar_consumptions (
+        id TEXT PRIMARY KEY, room_number TEXT NOT NULL, supply_id TEXT,
+        label TEXT NOT NULL, unit_price_cents INTEGER NOT NULL,
+        quantity INTEGER NOT NULL, amount_cents INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending','billed','cancelled')),
+        recorded_by TEXT NOT NULL, recorded_by_name TEXT NOT NULL,
+        recorded_at TEXT NOT NULL, billed_at TEXT, billed_by_name TEXT,
+        corrects_id TEXT, stay_id TEXT, version INTEGER NOT NULL)''');
+      // Guest stays as told by the reservation events (room and name only).
+      await tx.execute('''CREATE TABLE housekeeping_stays (
+        id TEXT PRIMARY KEY, room_number TEXT NOT NULL,
+        guest_name TEXT NOT NULL, checked_in_at TEXT NOT NULL,
+        checked_out_at TEXT)''');
+    }
     // A new install gets its starting data once every table exists.
     if (from < 1) {
       await HousekeepingStore._write(tx, housekeepingSeedState());
@@ -246,6 +320,11 @@ Map<String, dynamic> housekeepingSeedState({
       'inspectionRules': <String, dynamic>{},
       'issues': <dynamic>[],
       'settings': <String, dynamic>{},
+      'stockMovements': <dynamic>[],
+      'laundry': <dynamic>[],
+      'requests': <dynamic>[],
+      'minibar': <dynamic>[],
+      'stays': <dynamic>[],
     };
   }
   final seed = jsonDecode(housekeepingSeedJson) as Map<String, dynamic>;
@@ -260,7 +339,29 @@ Map<String, dynamic> housekeepingSeedState({
   return {
     'rooms': seed['rooms'],
     'roomArchives': <dynamic>[],
-    'supplies': seed['supplies'],
+    'supplies': [
+      for (final supply in seed['supplies'] as List)
+        {
+          ...supply as Map<String, dynamic>,
+          'category': categoryFromName(supply['name'] as String),
+          'priceCents': null,
+        },
+      for (final (id, name, price) in [
+        ('minibar-water', 'Eau minérale 50 cl', 400),
+        ('minibar-soda', 'Soda 33 cl', 450),
+        ('minibar-chocolate', 'Tablette de chocolat', 350),
+      ])
+        {
+          'id': id,
+          'name': name,
+          'quantity': 24,
+          'unit': 'unités',
+          'minimum': 6,
+          'version': 1,
+          'category': 'minibar',
+          'priceCents': price,
+        },
+    ],
     'notifications': seed['notifications'],
     'reads': <String, dynamic>{},
     'cleanings': <dynamic>[],
@@ -282,6 +383,11 @@ Map<String, dynamic> housekeepingSeedState({
           legacyIssue(room as Map<String, dynamic>, DateTime.now()),
     ],
     'settings': <String, dynamic>{},
+    'stockMovements': <dynamic>[],
+    'laundry': <dynamic>[],
+    'requests': <dynamic>[],
+    'minibar': <dynamic>[],
+    'stays': <dynamic>[],
   };
 }
 
@@ -418,6 +524,8 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             for (final k in ['id', 'name', 'quantity', 'unit', 'minimum'])
               k: row[k],
             'version': row['version'],
+            'category': row['category'] ?? 'entretien',
+            'priceCents': row['price_cents'],
           },
       ],
       'notifications': [
@@ -428,6 +536,7 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
           {
             for (final k in ['id', 'title', 'message', 'audience']) k: row[k],
             'roomNumber': row['room_number'],
+            'recipient': row['recipient_id'],
           },
       ],
       'reads': reads,
@@ -440,6 +549,41 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
       ],
       'lostItems': await _readLostItems(db),
       'issues': await _readIssues(db),
+      'stockMovements': [
+        for (final row in await db.query(
+          'housekeeping_stock_movements',
+          orderBy: 'at, rowid',
+        ))
+          Map<String, dynamic>.from(row),
+      ],
+      'laundry': await _withLines(
+        db,
+        'housekeeping_laundry_batches',
+        'housekeeping_laundry_lines',
+        'batch_id',
+        'sent_at DESC',
+      ),
+      'requests': await _withLines(
+        db,
+        'housekeeping_supply_requests',
+        'housekeeping_supply_request_lines',
+        'request_id',
+        'created_at DESC',
+      ),
+      'minibar': [
+        for (final row in await db.query(
+          'housekeeping_minibar_consumptions',
+          orderBy: 'recorded_at DESC, rowid DESC',
+        ))
+          Map<String, dynamic>.from(row),
+      ],
+      'stays': [
+        for (final row in await db.query(
+          'housekeeping_stays',
+          orderBy: 'checked_in_at, rowid',
+        ))
+          Map<String, dynamic>.from(row),
+      ],
       'settings': {
         for (final row in await db.query('housekeeping_settings'))
           row['key'] as String: {
@@ -511,6 +655,30 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
           },
       ],
     };
+  }
+
+  // Rows of [table] with their lines (in order) under 'lines'.
+  static Future<List<Map<String, dynamic>>> _withLines(
+    DatabaseExecutor db,
+    String table,
+    String lineTable,
+    String parent,
+    String orderBy,
+  ) async {
+    final lines = <Object?, List<Map<String, dynamic>>>{};
+    for (final row in await db.query(lineTable, orderBy: 'position')) {
+      lines
+          .putIfAbsent(row[parent], () => [])
+          .add(
+            Map<String, dynamic>.from(row)
+              ..remove(parent)
+              ..remove('position'),
+          );
+    }
+    return [
+      for (final row in await db.query(table, orderBy: orderBy))
+        {...row, 'lines': lines[row['id']] ?? <Map<String, dynamic>>[]},
+    ];
   }
 
   // Found items, newest first, each with its history (oldest first).
@@ -868,6 +1036,144 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             k: supplies[i][k],
           'version': supplies[i]['version'],
           'position': i,
+          'category': supplies[i]['category'] ?? 'entretien',
+          'price_cents': supplies[i]['priceCents'],
+        },
+    ]);
+    // The stock log only grows: insert the new movements.
+    final knownMoves = {
+      for (final row in await tx.query(
+        'housekeeping_stock_movements',
+        columns: ['id'],
+      ))
+        row['id'],
+    };
+    for (final m in state['stockMovements'] as List? ?? []) {
+      if (knownMoves.contains(m['id'])) continue;
+      await tx.insert('housekeeping_stock_movements', {
+        for (final k in [
+          'id',
+          'supply_id',
+          'supply_name',
+          'delta',
+          'quantity',
+          'reason',
+          'room_number',
+          'floor',
+          'actor_id',
+          'actor_name',
+          'ref_id',
+          'at',
+        ])
+          k: m[k],
+      });
+    }
+    Future<void> withLines(
+      String table,
+      String lineTable,
+      String parent,
+      List? rows,
+      List<String> columns,
+      List<String> lineColumns,
+    ) async {
+      // Parents first: new lines refer to them.
+      await sync(table, 'id', [
+        for (final row in rows ?? []) {for (final k in columns) k: row[k]},
+      ]);
+      await sync(lineTable, 'id', [
+        for (final row in rows ?? [])
+          for (final (n, line) in (row['lines'] as List).indexed)
+            {
+              for (final k in lineColumns) k: line[k],
+              parent: row['id'],
+              'position': n,
+            },
+      ]);
+    }
+
+    await withLines(
+      'housekeeping_laundry_batches',
+      'housekeeping_laundry_lines',
+      'batch_id',
+      state['laundry'] as List?,
+      [
+        'id',
+        'status',
+        'note',
+        'sent_at',
+        'sent_by_name',
+        'returned_at',
+        'returned_by_name',
+        'version',
+      ],
+      [
+        'id',
+        'supply_id',
+        'supply_name',
+        'unit',
+        'sent',
+        'received',
+        'damaged',
+        'lost',
+      ],
+    );
+    await withLines(
+      'housekeeping_supply_requests',
+      'housekeeping_supply_request_lines',
+      'request_id',
+      state['requests'] as List?,
+      [
+        'id',
+        'status',
+        'agent_id',
+        'agent_name',
+        'note',
+        'created_at',
+        'approved_at',
+        'prepared_at',
+        'delivered_at',
+        'refused_at',
+        'processed_by_name',
+        'refusal_reason',
+        'version',
+      ],
+      ['id', 'supply_id', 'supply_name', 'unit', 'requested', 'approved'],
+    );
+    await sync('housekeeping_minibar_consumptions', 'id', [
+      for (final c in state['minibar'] as List? ?? [])
+        {
+          for (final k in [
+            'id',
+            'room_number',
+            'supply_id',
+            'label',
+            'unit_price_cents',
+            'quantity',
+            'amount_cents',
+            'status',
+            'recorded_by',
+            'recorded_by_name',
+            'recorded_at',
+            'billed_at',
+            'billed_by_name',
+            'corrects_id',
+            'stay_id',
+            'version',
+          ])
+            k: c[k],
+        },
+    ]);
+    await sync('housekeeping_stays', 'id', [
+      for (final stay in state['stays'] as List? ?? [])
+        {
+          for (final k in [
+            'id',
+            'room_number',
+            'guest_name',
+            'checked_in_at',
+            'checked_out_at',
+          ])
+            k: stay[k],
         },
     ]);
     final notifications = state['notifications'] as List;
@@ -878,6 +1184,7 @@ class HousekeepingStore implements LocalSessionStore, LocalAttachmentStore {
             k: notifications[i][k],
           'room_number': notifications[i]['roomNumber'],
           'position': i,
+          'recipient_id': notifications[i]['recipient'],
         },
     ]);
     await tx.delete('housekeeping_notification_reads');

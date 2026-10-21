@@ -15,6 +15,18 @@ Statut des chambres, attribution, validation, linge et produits.
       rend la chambre au même agent, en priorité, avec les points à refaire ;
       historique des inspections par chambre, score dans le journal des nettoyages
 - [x] Linge et produits d’entretien (mouvements de stock)
+- [x] Articles typés (linge, produits d’accueil, produits d’entretien,
+      minibar) ; journal de chaque mouvement de stock par étage et chambre
+      (article, quantité, personne, UUID, horodatage) ; mêmes seuils d’alerte
+- [x] Blanchisserie : envoi (le linge sort du stock) puis retour, ligne par
+      ligne reçu + abîmé + perdu = envoyé ; seul le reçu revient en stock
+- [x] Demandes de fournitures des agents : demandée → approuvée → préparée →
+      livrée, ou refusée ; le stock baisse à la livraison (refusée s’il manque
+      du stock) ; l’agent est prévenu à chaque étape
+- [x] Minibar : carte avec prix (gouvernante ou Manager), consommations par
+      chambre (en attente → facturé), réassort ; « Valider et facturer » envoie
+      `ExtraCharged` une seule fois par consommation ; après facturation, une
+      correction passe par une écriture compensatoire
 - [x] Catalogue des chambres pour le Manager (création, catégorie, archive, restauration)
 - [x] Signalement d’un problème à la Maintenance depuis la fiche chambre :
       catégorie (Climatisation, Éclairage, Plomberie, Télévision, Mobilier,
@@ -47,6 +59,8 @@ au stock. Ces règles sont locales (`services/sqlite_housekeeping.dart`).
 | `MaintenanceRequested` reçu | chambre en maintenance (sauf si occupée) + signalement « Autre module » |
 | `MaintenanceResolved` reçu | signalements de la chambre résolus + notification ; la chambre reste hors service jusqu’à « Remettre à nettoyer » (gouvernante) |
 | `RoomReady` émis | à la validation du nettoyage |
+| `ExtraCharged` émis | « Valider et facturer » du minibar (une fois par consommation, montant négatif pour une correction) |
+| `GuestCheckedIn` / `GuestCheckedOut` reçus | séjour noté (chambre, nom) : une consommation n’est facturée que si son client est toujours là |
 | `MaintenanceRequested` émis | « Signaler un problème » sur la fiche chambre |
 
 La liste des agents vient de `session.staff` (module Utilisateurs).
@@ -59,6 +73,13 @@ signalement restent ici (`housekeeping_issues`). `MaintenanceResolved` ne porte
 que la chambre : il résout donc tous les signalements ouverts de la chambre.
 Les coordonnées des clients ne sont pas transmises au ménage (`GuestCheckedIn`
 ne donne que le nom) : « Prévenir le client » note la tentative sans appeler.
+
+Limites pour la facturation : `ExtraCharged` ne porte que la chambre, un
+libellé et un montant. Pas d’identifiant de charge (la facturation ne peut pas
+dédoublonner de son côté), pas de lien vers un séjour ou une réservation
+(`GuestCheckedIn` ne donne que le nom, `GuestCheckedOut` rien), pas
+d’accusé de réception. À demander : `chargeId`, `stayId`/`reservationId`,
+montants négatifs acceptés pour les corrections.
 
 Note vocale : fichier `housekeeping/voice/<uuid>.m4a` dans le dossier de
 l’application (paquets `record`, `audioplayers`, `path_provider`, permission
@@ -83,11 +104,12 @@ services/
   room_rules.dart               petites opérations communes sur une chambre
   inspection_scoring.dart       notes, poids, score et seuil d’inspection (pur Dart)
   issue_rules.dart              signalements, archivage des objets trouvés
+  inventory_rules.dart          journal du stock, blanchisserie, demandes, minibar
   voice_notes.dart              enregistrement et lecture des notes vocales
   evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
 ```
 
-Tables (version 5) : `housekeeping_rooms`, `housekeeping_photos`,
+Tables (version 6) : `housekeeping_rooms`, `housekeeping_photos`,
 `housekeeping_supplies`, `housekeeping_notifications`,
 `housekeeping_notification_reads`, `housekeeping_cleanings` (journal des
 nettoyages : durée, score d’inspection), `housekeeping_timer_segments`,
@@ -97,5 +119,9 @@ nettoyages : durée, score d’inspection), `housekeeping_timer_segments`,
 `housekeeping_inspections`, `housekeeping_inspection_items`,
 `housekeeping_inspection_rules`, `housekeeping_issues`,
 `housekeeping_issue_photos`, `housekeeping_lost_item_events` (historique des
-objets trouvés), `housekeeping_settings` (délai d’archivage).
+objets trouvés), `housekeeping_settings` (délai d’archivage),
+`housekeeping_stock_movements` (journal du stock),
+`housekeeping_laundry_batches`, `housekeeping_laundry_lines`,
+`housekeeping_supply_requests`, `housekeeping_supply_request_lines`,
+`housekeeping_minibar_consumptions`, `housekeeping_stays`.
 Une nouvelle installation reçoit des chambres et un stock fictifs.

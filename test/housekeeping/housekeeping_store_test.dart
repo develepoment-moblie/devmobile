@@ -130,12 +130,23 @@ void main() {
       'housekeeping_issue_photos',
       'housekeeping_lost_item_events',
       'housekeeping_settings',
+      'housekeeping_stock_movements',
+      'housekeeping_laundry_batches',
+      'housekeeping_laundry_lines',
+      'housekeeping_supply_requests',
+      'housekeeping_supply_request_lines',
+      'housekeeping_minibar_consumptions',
+      'housekeeping_stays',
     });
-    expect(await session.database.versionOf('housekeeping'), 5);
+    expect(await session.database.versionOf('housekeeping'), 6);
     login('amina');
     final state = await backend.snapshot();
     expect((state['rooms'] as List), hasLength(16));
-    expect((state['supplies'] as List), hasLength(5));
+    expect(
+      (state['supplies'] as List),
+      hasLength(8),
+      reason: "5 items + 3 minibar items",
+    );
     expect(
       (state['staff'] as List).map((s) => s['id']),
       containsAll(['amina', 'sarah', 'lina', 'youssef']),
@@ -225,7 +236,7 @@ void main() {
         'version': 1,
       }, where: "module = 'housekeeping'");
       await reopen();
-      expect(await session.database.versionOf('housekeeping'), 5);
+      expect(await session.database.versionOf('housekeeping'), 6);
       final kept = await room('305');
       expect((kept['employeeId'], kept['note']), ('sarah', 'Avant midi'));
       expect((kept['stayover'], kept['feedback']), (false, null));
@@ -270,7 +281,7 @@ void main() {
       'version': 2,
     }, where: "module = 'housekeeping'");
     await reopen();
-    expect(await session.database.versionOf('housekeeping'), 5);
+    expect(await session.database.versionOf('housekeeping'), 6);
     final kept = await room('305');
     expect((kept['employeeId'], kept['priority']), ('sarah', 'normal'));
     expect((await store.readState())['cleanings'], hasLength(1));

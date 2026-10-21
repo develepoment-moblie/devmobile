@@ -11,6 +11,7 @@ import '../models/room.dart';
 import 'agent_rooms_screen.dart';
 import 'details_screen.dart';
 import 'issues_screen.dart';
+import 'supply_requests_screen.dart';
 
 class AgentDashboardScreen extends StatelessWidget {
   final HotelData data;
@@ -149,6 +150,19 @@ class AgentDashboardScreen extends StatelessWidget {
             ),
             icon: const Icon(Icons.report_outlined),
             label: Text('Mes signalements · ${data.issues.length}'),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => SupplyRequestsScreen(data: data),
+              ),
+            ),
+            icon: const Icon(Icons.assignment_outlined),
+            label: Text(
+              'Mes demandes de fournitures · ${data.requests.where((r) => r.status.open).length}',
+            ),
           ),
           const SizedBox(height: 24),
           const Text(

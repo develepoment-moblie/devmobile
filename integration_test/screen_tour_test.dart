@@ -122,6 +122,13 @@ void main() {
       await tap(find.text(tab).last);
       await shot('supervisor_${tab.toLowerCase()}');
     }
+    await tap(find.text('Stock').last);
+    await tap(find.textContaining('Blanchisserie'));
+    await shot('laundry');
+    await back();
+    await tap(find.textContaining('Minibar ·'));
+    await shot('minibar_billing');
+    await back();
     await tap(find.text('Chambres').last);
     await tap(find.text('Chambre 101'));
     await shot('room_101_review');
@@ -158,6 +165,12 @@ void main() {
     await shot('agent_dashboard');
     await tap(find.text('Chambre 214'));
     await shot('agent_room_214');
+    await tap(find.textContaining('Minibar'));
+    await shot('agent_minibar_214');
+    await back();
+    await back();
+    await tap(find.textContaining('Mes demandes de fournitures'));
+    await shot('agent_supply_requests');
     await back();
     await tap(find.byTooltip('Retour à l’accueil'));
     await tester.pump(const Duration(milliseconds: 600));
@@ -178,6 +191,9 @@ void main() {
     await back();
     await tap(find.text('Tâches'));
     await shot('manager_category_tasks');
+    await back();
+    await tap(find.textContaining('Carte du minibar'));
+    await shot('manager_minibar');
     await back();
     await back();
     await signOut();

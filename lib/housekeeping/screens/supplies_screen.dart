@@ -8,6 +8,11 @@ import '../models/hotel_data.dart';
 import '../models/supply.dart';
 import '../custom/stock_movement_dialog.dart';
 import 'details_screen.dart';
+import 'laundry_screen.dart';
+import 'minibar_screen.dart';
+import 'stock_log_screen.dart';
+import 'supply_requests_screen.dart';
+import '../models/inventory.dart';
 import '../models/room.dart';
 
 class SuppliesScreen extends StatefulWidget {
@@ -20,6 +25,12 @@ class SuppliesScreen extends StatefulWidget {
 class _SuppliesScreenState extends State<SuppliesScreen> {
   bool dialogOpen = false;
   String? error;
+
+  /// Type filter (null: every item).
+  String? type;
+
+  void open(Widget screen) =>
+      Navigator.push(context, MaterialPageRoute<void>(builder: (_) => screen));
   Future<void> movement(Supply supply, bool receive) async {
     if (dialogOpen || !widget.data.isSupervisor) return;
     setState(() => dialogOpen = true);
@@ -141,13 +152,72 @@ class _SuppliesScreenState extends State<SuppliesScreen> {
               ),
           ],
         ),
+        if (widget.data.isSupervisor) ...[
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => open(SupplyRequestsScreen(data: widget.data)),
+                icon: const Icon(Icons.assignment_outlined, size: 18),
+                label: Text(
+                  'Demandes · ${widget.data.requests.where((r) => r.status.open).length}',
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => open(LaundryScreen(data: widget.data)),
+                icon: const Icon(
+                  Icons.local_laundry_service_outlined,
+                  size: 18,
+                ),
+                label: Text(
+                  'Blanchisserie · ${widget.data.laundry.where((b) => !b.returned).length}',
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => open(MinibarBillingScreen(data: widget.data)),
+                icon: const Icon(Icons.local_bar_outlined, size: 18),
+                label: Text(
+                  'Minibar · ${widget.data.minibar.where((e) => e.status == MinibarStatus.pending).length}',
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => open(StockLogScreen(data: widget.data)),
+                icon: const Icon(Icons.history, size: 18),
+                label: const Text('Journal'),
+              ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ChoiceChip(
+              label: const Text('Tous'),
+              selected: type == null,
+              onSelected: (_) => setState(() => type = null),
+            ),
+            for (final e in supplyTypeLabels.entries)
+              ChoiceChip(
+                label: Text(e.value),
+                selected: type == e.key,
+                onSelected: (_) => setState(() => type = e.key),
+              ),
+          ],
+        ),
         const SizedBox(height: 16),
         if (widget.data.supplies.isEmpty)
           const EmptyState(
             'Aucun article',
             'Ajoutez le linge et les produits suivis par le service.',
           ),
-        for (final (i, supply) in widget.data.supplies.indexed)
+        for (final (i, supply) in [
+          for (final s in widget.data.supplies)
+            if (type == null || s.category == type) s,
+        ].indexed)
           FadeSlideIn(
             index: i,
             child: Padding(
@@ -160,6 +230,14 @@ class _SuppliesScreenState extends State<SuppliesScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Text(
+                        supplyTypeLabels[supply.category] ?? '',
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                       Row(
                         children: [
                           Expanded(
@@ -224,13 +302,16 @@ class _SuppliesScreenState extends State<SuppliesScreen> {
                             ),
                           ),
                           const SizedBox(width: 6),
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 3),
-                            child: Text(
-                              '${supply.unit} · alerte à ${supply.minimum}',
-                              style: const TextStyle(
-                                color: AppColors.muted,
-                                fontSize: 12,
+                          Flexible(
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 3),
+                              child: Text(
+                                '${supply.unit} · alerte à ${supply.minimum}'
+                                '${supply.isMinibar ? ' · ${euros(supply.priceCents ?? 0)}' : ''}',
+                                style: const TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 12,
+                                ),
                               ),
                             ),
                           ),

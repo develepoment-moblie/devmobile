@@ -13,6 +13,7 @@ import '../services/voice_notes.dart';
 import '../services/inspection_scoring.dart';
 import 'cleaning_stats.dart';
 import 'inspection.dart';
+import 'inventory.dart';
 import 'issue.dart';
 import 'lost_item.dart';
 import 'room.dart';
@@ -52,6 +53,41 @@ class HotelData extends ChangeNotifier {
   final List<CleaningRecord> cleanings = [];
   final List<LostItem> lostItems = [];
   final List<Inspection> inspections = [];
+
+  /// Inventory: stock log, laundry (supervisor), requests and minibar
+  /// (all for the supervisor, their own for an agent).
+  final List<StockMovement> movements = [];
+  final List<LaundryBatch> laundry = [];
+  final List<SupplyRequest> requests = [];
+  final List<MinibarEntry> minibar = [];
+
+  List<Supply> suppliesOf(String category) => [
+    for (final s in supplies)
+      if (s.category == category) s,
+  ];
+  List<Supply> get minibarItems => suppliesOf('minibar');
+
+  /// Items an agent can use in a room or ask for (minibar excepted).
+  List<Supply> get roomSupplies => [
+    for (final s in supplies)
+      if (!s.isMinibar) s,
+  ];
+
+  /// A room's minibar entries, newest first.
+  List<MinibarEntry> minibarOf(String number) => [
+    for (final e in minibar)
+      if (e.roomNumber == number) e,
+  ];
+
+  /// What the room is charged for [entry], corrections included.
+  int billedQuantity(MinibarEntry entry) =>
+      entry.quantity +
+      minibar
+          .where(
+            (c) =>
+                c.correctsId == entry.id && c.status != MinibarStatus.cancelled,
+          )
+          .fold(0, (sum, c) => sum + c.quantity);
 
   /// Problem reports: all for the supervisor, their own for an agent.
   final List<Issue> issues = [];
@@ -221,6 +257,8 @@ class HotelData extends ChangeNotifier {
       supply.minimum = s['minimum'] as int;
       supply.quantity = s['quantity'] as int;
       supply.version = s['version'] as int;
+      supply.category = s['category'] as String? ?? 'entretien';
+      supply.priceCents = s['priceCents'] as int?;
       orderedSupplies.add(supply);
     }
     supplies
@@ -251,6 +289,30 @@ class HotelData extends ChangeNotifier {
       ..addAll([
         for (final item in json['lostItems'] as List? ?? [])
           LostItem.fromMap(item as Map),
+      ]);
+    movements
+      ..clear()
+      ..addAll([
+        for (final m in json['stockMovements'] as List? ?? [])
+          StockMovement.fromMap(m as Map),
+      ]);
+    laundry
+      ..clear()
+      ..addAll([
+        for (final b in json['laundry'] as List? ?? [])
+          LaundryBatch.fromMap(b as Map),
+      ]);
+    requests
+      ..clear()
+      ..addAll([
+        for (final r in json['requests'] as List? ?? [])
+          SupplyRequest.fromMap(r as Map),
+      ]);
+    minibar
+      ..clear()
+      ..addAll([
+        for (final c in json['minibar'] as List? ?? [])
+          MinibarEntry.fromMap(c as Map),
       ]);
     issues
       ..clear()
@@ -576,11 +638,15 @@ class HotelData extends ChangeNotifier {
     required String unit,
     required int quantity,
     required int minimum,
+    String category = 'entretien',
+    int? priceCents,
   }) => _remote('/v1/supplies/new/create', {
     'name': name,
     'unit': unit,
     'quantity': quantity,
     'minimum': minimum,
+    'category': category,
+    'priceCents': ?priceCents,
   });
 
   Future<void> updateSupply(
@@ -589,12 +655,111 @@ class HotelData extends ChangeNotifier {
     required String unit,
     required int minimum,
     int? version,
+    String? category,
+    int? priceCents,
   }) => _remote('/v1/supplies/${supply.id}/update', {
     'version': version ?? supply.version,
     'name': name,
     'unit': unit,
     'minimum': minimum,
+    'category': category ?? supply.category,
+    'priceCents': ?(priceCents ?? supply.priceCents),
   });
+
+  // ------------------------------------------------------------ inventory
+  List<Map<String, dynamic>> _lines(Map<Supply, int> items) => [
+    for (final e in items.entries)
+      if (e.value > 0) {'supplyId': e.key.id, 'quantity': e.value},
+  ];
+
+  /// Items used in [room] (usage log), taken from the storeroom stock.
+  Future<void> useSupply(Supply supply, Room room, int quantity) => _remote(
+    '/v1/supplies/${supply.id}/use',
+    {'roomNumber': room.number, 'quantity': quantity},
+  );
+
+  Future<void> sendLaundry(Map<Supply, int> items, {String note = ''}) =>
+      _remote('/v1/laundry/new/send', {
+        'lines': _lines(items),
+        if (note.trim().isNotEmpty) 'note': note.trim(),
+      });
+
+  /// Per item id: received, damaged and lost (adding up to what was sent).
+  Future<void> returnLaundry(
+    LaundryBatch batch,
+    Map<String, ({int received, int damaged, int lost})> lines,
+  ) => _remote('/v1/laundry/${batch.id}/return', {
+    'version': batch.version,
+    'lines': [
+      for (final e in lines.entries)
+        {
+          'supplyId': e.key,
+          'received': e.value.received,
+          'damaged': e.value.damaged,
+          'lost': e.value.lost,
+        },
+    ],
+  });
+
+  Future<void> requestSupplies(Map<Supply, int> items, {String note = ''}) =>
+      _remote('/v1/requests/new/create', {
+        'lines': _lines(items),
+        if (note.trim().isNotEmpty) 'note': note.trim(),
+      });
+
+  /// Approves [request], with the granted quantity per item id if changed.
+  Future<void> approveRequest(
+    SupplyRequest request, [
+    Map<String, int>? granted,
+  ]) => _remote('/v1/requests/${request.id}/approve', {
+    'version': request.version,
+    if (granted != null)
+      'lines': [
+        for (final e in granted.entries)
+          {'supplyId': e.key, 'quantity': e.value},
+      ],
+  });
+
+  Future<void> prepareRequest(SupplyRequest request) => _remote(
+    '/v1/requests/${request.id}/prepare',
+    {'version': request.version},
+  );
+
+  Future<void> deliverRequest(SupplyRequest request) => _remote(
+    '/v1/requests/${request.id}/deliver',
+    {'version': request.version},
+  );
+
+  Future<void> refuseRequest(SupplyRequest request, String reason) => _remote(
+    '/v1/requests/${request.id}/refuse',
+    {'version': request.version, 'reason': reason},
+  );
+
+  Future<void> recordMinibar(Room room, Supply item, int quantity) => _remote(
+    '/v1/minibar/new/record',
+    {'roomNumber': room.number, 'itemId': item.id, 'quantity': quantity},
+  );
+
+  /// Before billing: changes the quantity (0 cancels the entry).
+  Future<void> correctMinibar(MinibarEntry entry, int quantity) => _remote(
+    '/v1/minibar/${entry.id}/correct',
+    {'version': entry.version, 'quantity': quantity},
+  );
+
+  /// After billing: a compensating entry brings the total to [quantity].
+  Future<void> compensateMinibar(MinibarEntry entry, int quantity) => _remote(
+    '/v1/minibar/${entry.id}/compensate',
+    {'version': entry.version, 'quantity': quantity},
+  );
+
+  /// "Valider et facturer": one ExtraCharged per entry, sent to billing.
+  Future<void> postMinibar(String roomNumber, List<MinibarEntry> entries) =>
+      _remote('/v1/minibar/$roomNumber/post', {
+        'ids': [for (final e in entries) e.id],
+      });
+
+  Future<void> restockMinibar(Room room, Map<Supply, int> items) =>
+      _remote('/v1/minibar/${room.number}/restock', {'lines': _lines(items)});
 
   Future<void> deleteSupply(Supply supply) =>
       _remote('/v1/supplies/${supply.id}/delete', {'version': supply.version});

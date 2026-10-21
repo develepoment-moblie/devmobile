@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../shared/services/app_events.dart';
 import 'housekeeping_store.dart';
+import 'inventory_rules.dart';
 import 'issue_rules.dart';
 import 'room_rules.dart';
 
@@ -18,6 +19,8 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
     (e) => _apply(store, (state) {
       final room = activeRoom(state, e.roomNumber);
       if (room == null || room['status'] == 'occupied') return;
+      // Who is in the room: minibar charges belong to this stay.
+      checkIn(state, e.roomNumber, e.guestName, DateTime.now());
       room['status'] = 'occupied';
       room['priority'] = 'normal';
       resetCleaning(room);
@@ -32,6 +35,7 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
     (e) => _apply(store, (state) {
       final room = activeRoom(state, e.roomNumber);
       if (room == null) return;
+      checkOut(state, e.roomNumber, DateTime.now());
       if (room['status'] == 'maintenance') {
         addHistory(room, 'Départ du client · maintenance en cours');
       } else {

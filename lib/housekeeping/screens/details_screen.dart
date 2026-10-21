@@ -12,6 +12,9 @@ import 'assign_task_screen.dart';
 import 'inspection_history_screen.dart';
 import 'inspection_screen.dart';
 import 'issues_screen.dart';
+import 'minibar_screen.dart';
+import '../models/inventory.dart';
+import '../custom/quantity_lines_dialog.dart';
 import 'report_issue_screen.dart';
 import 'task_photo_screen.dart';
 import '../custom/add_room_task_dialog.dart';
@@ -149,6 +152,39 @@ class _DetailsScreenState extends State<DetailsScreen> {
     ),
     'Recouche demandée',
   );
+
+  // Items used in the room: logged per room and floor, out of the stock.
+  Future<void> useItems() async {
+    final items = widget.data.roomSupplies;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => QuantityLinesDialog(
+        title: 'Articles utilisés · ${widget.room.number}',
+        action: 'Enregistrer',
+        message: 'Retirés du stock et notés dans le journal de la chambre.',
+        lines: [
+          for (final s in items)
+            QuantityLine(
+              s.id,
+              s.name,
+              detail: '${s.quantity} ${s.unit} en stock',
+              max: s.quantity,
+            ),
+        ],
+        save: (q, _) async {
+          for (final s in items) {
+            if (q[s.id] case final n?) {
+              await widget.data.useSupply(s, widget.room, n);
+            }
+          }
+        },
+      ),
+    );
+    if (mounted && saved == true) {
+      showFeedback(context, 'Utilisation enregistrée');
+    }
+  }
 
   Future<void> lostItem() async {
     final saved = await showDialog<bool>(
@@ -564,6 +600,35 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 onPressed: saving ? null : report,
                 icon: const Icon(Icons.build_outlined, size: 18),
                 label: const Text('Signaler un problème'),
+              ),
+            ],
+            if (data.isSupervisor || data.canClean(room)) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: saving ? null : useItems,
+                    icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                    label: const Text('Utiliser des articles'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: saving
+                        ? null
+                        : () => Navigator.push(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  MinibarRoomScreen(data: data, room: room),
+                            ),
+                          ),
+                    icon: const Icon(Icons.local_bar_outlined, size: 18),
+                    label: Text(
+                      'Minibar${data.minibarOf(room.number).where((e) => e.status == MinibarStatus.pending).isEmpty ? '' : ' · ${data.minibarOf(room.number).where((e) => e.status == MinibarStatus.pending).length} en attente'}',
+                    ),
+                  ),
+                ],
               ),
             ],
             if (data.canRecordLostItem(room)) ...[

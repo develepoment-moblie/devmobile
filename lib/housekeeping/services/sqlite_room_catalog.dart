@@ -1,4 +1,5 @@
 import '../models/task_schema.dart';
+import 'inventory_rules.dart';
 import 'local_session_store.dart';
 import 'mutation_meta.dart';
 import 'room_catalog_backend.dart';
@@ -29,6 +30,10 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
       'categoryTasks': s['categoryTasks'] ?? {},
       'estimates': s['estimates'] ?? {},
       'inspectionRules': s['inspectionRules'] ?? {},
+      'minibarItems': [
+        for (final item in s['supplies'] as List? ?? [])
+          if (item['category'] == 'minibar') item,
+      ],
     });
   }
 
@@ -115,6 +120,12 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
     }
 
     switch (action) {
+      case RoomCatalogAction.saveMinibarItem:
+        saveMinibarItem(s, body, store.fail);
+        return;
+      case RoomCatalogAction.deleteMinibarItem:
+        deleteMinibarItem(s, body, store.fail);
+        return;
       case RoomCatalogAction.setInspectionRules:
         setInspectionRules(s, category(), body, store.fail);
         return;

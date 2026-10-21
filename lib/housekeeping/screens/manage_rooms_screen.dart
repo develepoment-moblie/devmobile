@@ -13,6 +13,7 @@ import '../services/mutation_meta.dart';
 import '../services/room_catalog_backend.dart';
 import 'category_tasks_screen.dart';
 import 'floor_screen.dart';
+import 'minibar_catalog_screen.dart';
 
 // The Manager's catalog: the hotel's floors, each opening its rooms.
 class ManageRoomsScreen extends StatefulWidget {
@@ -201,6 +202,14 @@ class _ManageRoomsScreenState extends State<ManageRoomsScreen> {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () => open(MinibarCatalogScreen(catalog: catalog)),
+                icon: const Icon(Icons.local_bar_outlined),
+                label: Text(
+                  'Carte du minibar · ${snapshot.minibarItems.length}',
+                ),
               ),
               const SizedBox(height: 14),
               TextField(

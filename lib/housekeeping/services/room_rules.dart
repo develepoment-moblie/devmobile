@@ -26,12 +26,15 @@ void addHistory(Map<String, dynamic> room, String entry) =>
 void bumpVersion(Map<String, dynamic> room) =>
     room['version'] = (room['version'] as int) + 1;
 
+/// [recipient] limits the notification to one account (e.g. the agent whose
+/// supply request changed).
 void addNotification(
   Map<String, dynamic> state, {
   required String title,
   required String message,
   required String roomNumber,
   String audience = 'all',
+  String? recipient,
 }) => (state['notifications'] as List).insert(0, {
   'id':
       '${roomNumber.isEmpty ? 'stock' : roomNumber}-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}',
@@ -39,6 +42,7 @@ void addNotification(
   'message': message,
   'roomNumber': roomNumber,
   'audience': audience,
+  'recipient': recipient,
 });
 
 Map<String, dynamic>? activeRoom(Map<String, dynamic> state, String number) =>

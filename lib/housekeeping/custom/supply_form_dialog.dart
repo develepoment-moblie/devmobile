@@ -24,6 +24,12 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
     text: widget.supply == null ? '' : '${widget.supply!.minimum}',
   );
   late final int? _version = widget.supply?.version;
+  late String _category = widget.supply?.category ?? 'entretien';
+  late final _price = TextEditingController(
+    text: widget.supply?.priceCents == null
+        ? ''
+        : centsText(widget.supply!.priceCents!),
+  );
   bool _busy = false;
   String? _error;
   bool get _editing => widget.supply != null;
@@ -40,6 +46,7 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
     _unit.dispose();
     _quantity.dispose();
     _minimum.dispose();
+    _price.dispose();
     super.dispose();
   }
 
@@ -65,6 +72,8 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
           unit: _unit.text.trim(),
           minimum: int.parse(_minimum.text.trim()),
           version: _version,
+          category: _category,
+          priceCents: _category == 'minibar' ? parseEuros(_price.text) : null,
         );
       } else {
         await widget.data.createSupply(
@@ -72,6 +81,8 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
           unit: _unit.text.trim(),
           quantity: int.parse(_quantity.text.trim()),
           minimum: int.parse(_minimum.text.trim()),
+          category: _category,
+          priceCents: _category == 'minibar' ? parseEuros(_price.text) : null,
         );
       }
       if (!mounted) return;
@@ -128,6 +139,40 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
                   ? 'Renseignez l’article.'
                   : null,
             ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              initialValue: _category,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Type'),
+              items: [
+                for (final e in supplyTypeLabels.entries)
+                  DropdownMenuItem(value: e.key, child: Text(e.value)),
+              ],
+              onChanged: _busy
+                  ? null
+                  : (v) => setState(() => _category = v ?? _category),
+            ),
+            if (_category == 'minibar') ...[
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _price,
+                enabled: !_busy,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Prix de vente',
+                  suffixText: '€',
+                  hintText: '4,50',
+                ),
+                validator: (v) {
+                  final cents = parseEuros(v ?? '');
+                  return cents == null || cents < 1 || cents > 100000
+                      ? 'Prix de 0,01 à 1 000 €.'
+                      : null;
+                },
+              ),
+            ],
             const SizedBox(height: 8),
             TextFormField(
               controller: _unit,

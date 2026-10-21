@@ -9,6 +9,7 @@ import 'auto_assignment.dart';
 import 'cleaning_timer.dart';
 import 'housekeeping_store.dart';
 import 'inspection_scoring.dart';
+import 'inventory_rules.dart';
 import 'issue_rules.dart';
 import 'local_attachment_store.dart';
 import 'local_session_store.dart';
@@ -22,6 +23,10 @@ import 'room_rules.dart';
 // /v1/lost/<id|new>/<action>, /v1/availability/<agentId>/set,
 // /v1/plans/new/apply, /v1/inspection-rules/<category>/set,
 // /v1/issues/<id>/<bring-back|close>, /v1/settings/lost-archive-days/set,
+// /v1/supplies/<id>/use, /v1/laundry/<new|id>/<send|return>,
+// /v1/requests/<new|id>/<create|approve|prepare|deliver|refuse>,
+// /v1/minibar/<new|id|room>/<record|correct|compensate|post|restock>
+// (see InventoryRules),
 // /v1/notifications/read. approve and refuse take optional inspection
 // ratings (see _inspect); report creates a problem report (housekeeping_issues).
 // Every body carries mutationId (UUID v4) and clientTimestamp; a repeated
@@ -72,9 +77,40 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
         .toList();
     final reads = ((s['reads'] as Map)[actor['id']] as List?) ?? [];
     s['notifications'] = (s['notifications'] as List)
-        .where((n) => n['audience'] == 'all' || n['audience'] == actor['role'])
+        .where((n) => _sees(n as Map, actor))
         .map((n) => {...n as Map, 'read': reads.contains(n['id'])})
         .toList();
+    // Inventory: agents see their own requests, movements and consumptions.
+    bool mine(Object? id) => supervisor || id == actor['id'];
+    s['stockMovements'] = [
+      for (final m in s['stockMovements'] as List? ?? [])
+        if (mine(m['actor_id'])) m,
+    ];
+    s['requests'] = [
+      for (final r in s['requests'] as List? ?? [])
+        if (mine(r['agent_id']))
+          {
+            ...r,
+            'lines': [
+              for (final l in r['lines'] as List)
+                {
+                  ...l,
+                  'available': supplyById(s, l['supply_id'])?['quantity'] ?? 0,
+                },
+            ],
+          },
+    ];
+    s['minibar'] = [
+      for (final c in s['minibar'] as List? ?? [])
+        if (mine(c['recorded_by']))
+          {
+            ...c,
+            // Posting is refused once the guest of the entry has left.
+            'stayChanged':
+                c['stay_id'] != openStay(s, c['room_number'] as String)?['id'],
+          },
+    ];
+    if (!supervisor) s.remove('laundry');
     // Agents see only their own cleanings and found items.
     s['cleanings'] = [
       for (final c in s['cleanings'] as List? ?? [])
@@ -120,6 +156,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       'timerSegments',
       'mutations',
       'settings',
+      'stays',
     ]) {
       s.remove(key);
     }
@@ -197,9 +234,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
         'Notifications invalides.',
       );
       final visible = (s['notifications'] as List)
-          .where(
-            (n) => n['audience'] == 'all' || n['audience'] == actor['role'],
-          )
+          .where((n) => _sees(n as Map, actor))
           .map((n) => n['id'])
           .toSet();
       final reads = (s['reads'] as Map).putIfAbsent(
@@ -214,6 +249,15 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     final parts = path.split('/');
     require(parts.length == 5 && parts[1] == 'v1', 'Action inconnue.');
     final family = parts[2], key = parts[3], action = parts[4];
+    if (InventoryRules(
+      s,
+      actor,
+      now,
+      store.fail,
+      announce,
+    ).apply(family, key, action, body)) {
+      return;
+    }
 
     // ---------------------------------------------------------------- stock
     if (family == 'supplies') {
@@ -232,6 +276,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
         final name = text(body['name'], 80, 'Nom de 1 à 80 caractères.');
         final unit = text(body['unit'], 20, 'Unité de 1 à 20 caractères.');
         unique(name);
+        final type = supplyFields(body, store.fail);
         supplies.add({
           'id': newId('supply'),
           'name': name,
@@ -239,6 +284,8 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
           'quantity': amount(body['quantity'], 'Quantité invalide.'),
           'minimum': amount(body['minimum'], 'Minimum invalide.'),
           'version': 1,
+          'category': type.category,
+          'priceCents': type.priceCents,
         });
         return;
       }
@@ -256,33 +303,36 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
             delta is int && delta != 0 && delta.abs() <= 100000,
             'Quantité invalide.',
           );
-          final previous = row['quantity'] as int;
-          final quantity = previous + (delta as int);
-          require(
-            quantity >= 0 && quantity <= 1000000,
-            'Stock insuffisant ou quantité trop élevée.',
+          // Logged, alert once when the stock falls to its minimum.
+          moveStock(
+            s,
+            row,
+            delta as int,
+            reason: 'manual',
+            actor: actor,
+            now: now,
+            fail: store.fail,
           );
-          row['quantity'] = quantity;
-          // Alert once, when the stock falls to its minimum or below.
-          final minimum = row['minimum'] as int;
-          if (previous > minimum && quantity <= minimum) {
-            addNotification(
-              s,
-              title: quantity == 0 ? 'Rupture de stock' : 'Stock bas',
-              message: quantity == 0
-                  ? '${row['name']} : stock épuisé (minimum $minimum). Pensez à réapprovisionner.'
-                  : '${row['name']} : il reste $quantity ${row['unit']} (minimum $minimum). Pensez à réapprovisionner.',
-              roomNumber: '',
-              audience: 'supervisor',
-            );
-          }
+          return;
         case 'update':
           final name = text(body['name'], 80, 'Nom de 1 à 80 caractères.');
           unique(name, key);
           row['name'] = name;
           row['unit'] = text(body['unit'], 20, 'Unité de 1 à 20 caractères.');
           row['minimum'] = amount(body['minimum'], 'Minimum invalide.');
+          final type = supplyFields(
+            body,
+            store.fail,
+            fallback: row['category'] as String? ?? 'entretien',
+          );
+          row['category'] = type.category;
+          row['priceCents'] = type.priceCents;
         case 'delete':
+          require(
+            !supplyInUse(s, key),
+            'Article en blanchisserie ou dans une demande en cours.',
+            409,
+          );
           supplies.remove(row);
           return;
         default:
@@ -1154,6 +1204,11 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       if (result != null) cycle['inspection_score'] = result.score;
     }
   }
+
+  // Audience, and the one recipient of a personal notification.
+  static bool _sees(Map n, Map<String, dynamic> actor) =>
+      (n['audience'] == 'all' || n['audience'] == actor['role']) &&
+      (n['recipient'] == null || n['recipient'] == actor['id']);
 
   bool _isAgent(Map<String, dynamic> s, Object? id) => (s['users'] as List).any(
     (u) => u['id'] == id && u['role'] == 'staff' && u['deleted'] != true,

@@ -64,7 +64,8 @@ Features:
 - scored inspection: each item rated OK / partiel / non conforme with a weight, score out of 100 against a per-category threshold, "Renvoyer en nettoyage" back to the same agent with the failed items, inspection history per room, score stored in the cleaning log;
 - recouche (cleaning an occupied room);
 - task lists per room category;
-- stock items with automatic low-stock alerts;
+- stock items with automatic low-stock alerts, typed (linen, amenities, cleaning products, minibar), with a log of every movement per floor and room;
+- laundry tracking (sent → returned with damaged/lost), agents' supply requests (requested → approved → prepared → delivered, or refused), minibar consumptions posted once to billing through `ExtraCharged`, corrections after posting as compensating entries;
 - problem reports: category, description, priority, up to 3 photos, optional voice note (60 s), optional "out of service"; a "Signalements" screen (reported → resolved → closed); after `MaintenanceResolved` the supervisor brings the room back to cleaning;
 - lost and found: found → guest notified → returned, or archived (by hand or after a configurable delay); every contact attempt logged; search and filters; full history per item;
 - notifications, plus Android notifications;
@@ -73,12 +74,12 @@ Features:
 - Manager floor view (floors → room grid → room sheet), creating many rooms at once, archive and restore;
 - reacting to other modules' events.
 
-Database: `housekeeping_*` tables, at version 5 (rooms, photos, supplies, notifications, cleaning log, lost items, category tasks, floors, and more).
+Database: `housekeeping_*` tables, at version 6 (rooms, photos, supplies, notifications, cleaning log, lost items, category tasks, floors, and more).
 
 Also done: a cleaning timer per room (start, pause, resume, stop; survives restarts) and automatic assignment of rooms to housekeepers, as a separate testable module.
 
 ## Quality and conventions
-- **Tests:** about 110 automated tests covering business rules on a real SQLite database, widget tests (some use an in-memory store that runs the real rules) and screenshot (golden) tests. On-phone check: `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screen_tour_test.dart -d <device>`.
+- **Tests:** about 130 automated tests covering business rules on a real SQLite database, widget tests (some use an in-memory store that runs the real rules) and screenshot (golden) tests. On-phone check: `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screen_tour_test.dart -d <device>`.
 - **Before every commit:** `flutter analyze` must report no issues and `flutter test` must pass.
 - **Design:** dark green `#183C35`, terracotta `#C66F55`, gold, Manrope font. Animations play once and respect Android's "remove animations" setting.
 - **Build options:** `--dart-define=HOUSEKEEPING_SAMPLE_DATA=false` makes a new install start with an empty hotel.
@@ -97,3 +98,4 @@ Also done: a cleaning timer per room (start, pause, resume, stop; survives resta
 - Testing the camera flows on the phone: photos, QR scanning, notifications.
 - Shared events are thin: `MaintenanceRequested` has no category, priority level, photos, voice note or report id; `MaintenanceResolved` has no report id. Housekeeping keeps the full report locally until the maintenance owner extends them.
 - Guest contact details are not shared with housekeeping, so "Prévenir le client" only logs the attempt.
+- `ExtraCharged` has no charge id, stay/reservation id or acknowledgement; `GuestCheckedIn`/`GuestCheckedOut` have no reservation id. Billing attaches charges by room only.
