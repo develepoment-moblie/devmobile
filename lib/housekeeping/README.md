@@ -31,6 +31,14 @@ Statut des chambres, attribution, validation, linge et produits.
 - [x] Tableau de bord (gouvernante, Manager) : chambres par statut, nettoyés
       et à faire, temps moyen (minuteur), chambres par heure et score moyen
       par agent, signalements ouverts ; mis à jour en direct
+- [x] Alerte « Nettoyage en retard » confiée à Android à l’avance : elle
+      s’affiche même application fermée (heure approximative, replanifiée
+      après un redémarrage)
+- [x] Sauvegarde et restauration du module (tables housekeeping_*, photos et
+      notes vocales) : une sauvegarde automatique par jour (7 gardées),
+      partage vers Drive ou e-mail, restauration par le Manager avec
+      sauvegarde de sécurité avant ; une sauvegarde plus ancienne est mise à
+      niveau ; les tables des autres modules ne sont jamais touchées
 - [x] Minibar : carte avec prix (gouvernante ou Manager), consommations par
       chambre (en attente → facturé), réassort ; « Valider et facturer » envoie
       `ExtraCharged` une seule fois par consommation ; après facturation, une
@@ -77,7 +85,14 @@ Mise à jour en direct, sans minuterie : le magasin (`HousekeepingStore`)
 signale chaque enregistrement réussi (action d’un écran ou événement d’un
 autre module) ; `HotelData` et `DashboardData` relisent alors les données.
 Notifications du téléphone : affichées tant que l’application tourne (ouverte
-ou en arrière-plan), pas de serveur ni de notification à distance.
+ou en arrière-plan), pas de serveur ni de notification à distance. Seule
+l’alerte de retard, prévisible, est programmée dans Android (paquet
+`timezone`, permission `RECEIVE_BOOT_COMPLETED` et deux récepteurs dans le
+manifeste).
+
+Sauvegardes : `<dossier de l’application>/housekeeping/backups/<base>/`,
+fichiers `nova-paris-menage-AAAA-MM-JJ-HHMMSS.json.gz` (paquets `share_plus`
+pour partager, `file_picker` pour choisir un fichier à restaurer).
 
 Limites des événements partagés (à voir avec le module Maintenance) :
 `MaintenanceRequested` ne porte que la chambre, une description et « urgent ».
@@ -121,6 +136,7 @@ services/
   inventory_rules.dart          journal du stock, blanchisserie, demandes, minibar
   notification_rules.dart       catégories de notifications, retards
   dashboard_queries.dart        requêtes SQL du tableau de bord
+  housekeeping_backup.dart      sauvegarde et restauration du module
   voice_notes.dart              enregistrement et lecture des notes vocales
   evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
 ```

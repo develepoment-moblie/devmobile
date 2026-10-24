@@ -71,6 +71,8 @@ Features:
 - notifications by category with per-user switches (urgent task, sent back, departure, ready for inspection, low stock, maintenance, late cleaning), shown as Android notifications while the app runs;
 - a live dashboard for the supervisor and the Manager (rooms by status, cleaned vs pending, average timer time, rooms per hour and inspection score per agent, open issues), built on SQL aggregates;
 - no polling: the store signals every saved change and the controllers re-read;
+- the late-cleaning alert is scheduled in Android so it shows even when the app is closed;
+- backup and restore of the housekeeping tables (photos and voice notes included): daily automatic backup, share to Drive/e-mail, restore by the Manager;
 - statistics from a cleaning log;
 - QR code per room door and a scanner;
 - Manager floor view (floors → room grid → room sheet), creating many rooms at once, archive and restore;
@@ -81,7 +83,7 @@ Database: `housekeeping_*` tables, at version 7 (rooms, photos, supplies, notifi
 Also done: a cleaning timer per room (start, pause, resume, stop; survives restarts) and automatic assignment of rooms to housekeepers, as a separate testable module.
 
 ## Quality and conventions
-- **Tests:** about 145 automated tests covering business rules on a real SQLite database, widget tests (some use an in-memory store that runs the real rules) and screenshot (golden) tests. On-phone check: `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screen_tour_test.dart -d <device>`.
+- **Tests:** about 155 automated tests covering business rules on a real SQLite database, widget tests (some use an in-memory store that runs the real rules) and screenshot (golden) tests. On-phone check: `flutter drive --driver=test_driver/integration_test.dart --target=integration_test/screen_tour_test.dart -d <device>`.
 - **Before every commit:** `flutter analyze` must report no issues and `flutter test` must pass.
 - **Design:** dark green `#183C35`, terracotta `#C66F55`, gold, Manrope font. Animations play once and respect Android's "remove animations" setting.
 - **Build options:** `--dart-define=HOUSEKEEPING_SAMPLE_DATA=false` makes a new install start with an empty hotel.
@@ -96,7 +98,6 @@ Also done: a cleaning timer per room (start, pause, resume, stop; survives resta
 - Real accounts and login (user management), remembered between launches.
 - The four teammate modules, and wiring their events (checkout → housekeeping, and so on).
 - Offline sync and a server: planned next. New mutations carry a client UUID and timestamp for this.
-- Database backup and restore.
 - Testing the camera flows on the phone: photos, QR scanning, notifications.
 - Shared events are thin: `MaintenanceRequested` has no category, priority level, photos, voice note or report id; `MaintenanceResolved` has no report id. Housekeeping keeps the full report locally until the maintenance owner extends them.
 - Guest contact details are not shared with housekeeping, so "Prévenir le client" only logs the attempt.

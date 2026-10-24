@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../shared/models/app_user.dart';
 import '../../shared/services/app_session.dart';
 import '../models/hotel_data.dart';
+import '../services/housekeeping_backup.dart';
 import '../services/housekeeping_store.dart';
 import '../services/phone_alerts.dart';
 import '../services/sqlite_housekeeping.dart';
@@ -37,9 +40,12 @@ class _CleaningWorkspace extends StatefulWidget {
 }
 
 class _CleaningWorkspaceState extends State<_CleaningWorkspace> {
-  late final data = HotelData(
-    api: SqliteHousekeeping(widget.store, events: widget.session.events),
-  )..watchLate = true;
+  late final data =
+      HotelData(
+          api: SqliteHousekeeping(widget.store, events: widget.session.events),
+        )
+        ..watchLate = true
+        ..lateAlarms = _alerts;
   bool loading = true;
   String? error;
   // One instance for the app: the plugin is initialised once.
@@ -66,6 +72,15 @@ class _CleaningWorkspaceState extends State<_CleaningWorkspace> {
       await data.refresh();
       // Found items nobody claimed within the delay are archived.
       await data.archiveUnclaimed();
+      // Once a day, a backup in the app's folder (the 7 last are kept).
+      unawaited(
+        HousekeepingBackup(widget.store).dailyBackup().then<void>(
+          (_) {},
+          onError: (Object e) => debugPrint(
+            'housekeeping: sauvegarde automatique impossible ($e)',
+          ),
+        ),
+      );
     } catch (e) {
       error = e.toString();
     } finally {

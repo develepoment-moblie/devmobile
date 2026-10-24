@@ -100,3 +100,38 @@ Duration lateLimit(Map<String, dynamic> state, Map<String, dynamic> room) {
   }
   return (changed: changed, next: next);
 }
+
+/// A late-cleaning alert Android delivers by itself at [at], even when the
+/// app is closed.
+class LateAlarm {
+  final String roomNumber, agentName;
+  final DateTime at;
+  final int limitMinutes;
+  const LateAlarm(this.roomNumber, this.agentName, this.at, this.limitMinutes);
+}
+
+/// The running cleanings that are not late yet: when each will be.
+List<LateAlarm> pendingLateAlarms(Map<String, dynamic> state, DateTime now) {
+  final names = {
+    for (final u in state['users'] as List? ?? []) u['id']: u['full_name'],
+  };
+  return [
+    for (final cleaning
+        in (state['cleanings'] as List? ?? []).cast<Map<String, dynamic>>())
+      if (cleaning['approved_at'] == null &&
+          cleaning['finished_at'] == null &&
+          cleaning['late_notified_at'] == null)
+        if (activeRoom(state, cleaning['room_number'] as String)
+            case final room?)
+          if (segmentsOf(state, cleaning['id'] as String) case final segments
+              when segments.any((t) => t['ended_at'] == null))
+            if (lateLimit(state, room) - elapsedOf(segments, now)
+                case final left when left > Duration.zero)
+              LateAlarm(
+                room['number'] as String,
+                '${names[cleaning['agent_id']] ?? 'L’agent'}',
+                now.add(left),
+                lateLimit(state, room).inMinutes,
+              ),
+  ];
+}

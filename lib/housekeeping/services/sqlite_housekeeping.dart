@@ -1418,6 +1418,15 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     return next;
   }
 
+  /// The alerts Android should deliver by itself for the running cleanings
+  /// (empty when the signed-in user switched late alerts off).
+  Future<List<LateAlarm>> lateAlarms() async {
+    final s = await store.readState();
+    final actor = _principal(s);
+    if (mutedCategories(s, actor['id']).contains('late')) return const [];
+    return pendingLateAlarms(s, clock());
+  }
+
   /// Photo of a problem report: for the supervisor or the reporter.
   Future<String> issuePhoto(String issueId, String photoId) async {
     final s = await store.readState();

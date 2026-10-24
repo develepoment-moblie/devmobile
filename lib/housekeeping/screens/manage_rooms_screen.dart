@@ -15,6 +15,8 @@ import 'category_tasks_screen.dart';
 import 'floor_screen.dart';
 import 'minibar_catalog_screen.dart';
 import 'staff_screen.dart' show openDashboard;
+import 'backup_screen.dart';
+import '../services/housekeeping_backup.dart';
 import '../services/housekeeping_store.dart';
 import '../services/sqlite_room_catalog.dart';
 
@@ -210,10 +212,26 @@ class _ManageRoomsScreenState extends State<ManageRoomsScreen> {
                 store: final HousekeepingStore store,
               )) ...[
                 const SizedBox(height: 10),
-                FilledButton.tonalIcon(
-                  onPressed: () => openDashboard(context, store),
-                  icon: const Icon(Icons.space_dashboard_outlined),
-                  label: const Text('Tableau de bord'),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: () => openDashboard(context, store),
+                        icon: const Icon(Icons.space_dashboard_outlined),
+                        label: const Text('Tableau de bord'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => open(
+                          BackupScreen(backup: HousekeepingBackup(store)),
+                        ),
+                        icon: const Icon(Icons.backup_outlined),
+                        label: const Text('Sauvegardes'),
+                      ),
+                    ),
+                  ],
                 ),
               ],
               const SizedBox(height: 10),

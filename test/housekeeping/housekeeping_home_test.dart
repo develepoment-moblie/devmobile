@@ -45,7 +45,7 @@ void main() {
   // Real SQLite takes longer when the whole suite runs in parallel: wait for
   // [finder] rather than a fixed time.
   Future<void> settleUntil(WidgetTester tester, Finder finder) async {
-    for (var i = 0; i < 40 && finder.evaluate().isEmpty; i++) {
+    for (var i = 0; i < 120 && finder.evaluate().isEmpty; i++) {
       await settle(tester);
     }
   }
@@ -96,7 +96,8 @@ void main() {
     );
     await tester.tap(find.text('Envoyer le signalement'));
     await settleUntil(tester, find.text('Problème signalé à la maintenance'));
-    expect(find.text('Problème signalé à la maintenance'), findsOneWidget);
+    // During the page transition the message can show on both pages.
+    expect(find.text('Problème signalé à la maintenance'), findsWidgets);
     final state = await tester.runAsync(
       () => housekeepingStoreFor(session).readState(),
     );

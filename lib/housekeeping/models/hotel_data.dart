@@ -13,6 +13,7 @@ import '../services/voice_notes.dart';
 import '../services/inspection_scoring.dart';
 import '../services/local_session_store.dart';
 import '../services/notification_rules.dart';
+import '../services/phone_alerts.dart';
 import 'cleaning_stats.dart';
 import 'inspection.dart';
 import 'inventory.dart';
@@ -79,6 +80,10 @@ class HotelData extends ChangeNotifier {
   Timer? _lateTimer;
   bool _checkingLate = false;
 
+  /// Hands the coming late alerts to Android, for when the app is closed.
+  LateAlarms? lateAlarms;
+  String? _plannedAlarms;
+
   Future<void> _checkLate() async {
     final backend = api;
     if (!watchLate || _disposed || _checkingLate) return;
@@ -86,6 +91,18 @@ class HotelData extends ChangeNotifier {
     _checkingLate = true;
     try {
       final next = await backend.checkLate();
+      if (lateAlarms case final alarms?) {
+        final planned = await backend.lateAlarms();
+        // Re-planned only when the set changes (a timer started, paused…).
+        final key = [
+          for (final a in planned)
+            '${a.roomNumber}@${a.at.millisecondsSinceEpoch ~/ 60000}',
+        ].join(',');
+        if (key != _plannedAlarms) {
+          _plannedAlarms = key;
+          await alarms.sync(planned);
+        }
+      }
       _lateTimer?.cancel();
       if (next != null && !_disposed) {
         _lateTimer = Timer(

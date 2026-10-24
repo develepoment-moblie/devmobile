@@ -487,6 +487,14 @@ class HousekeepingStore
   Future<T> query<T>(Future<T> Function(DatabaseExecutor db) read) =>
       _queue(() => read(_db));
 
+  /// Replaces tables as a whole (backup restore), queued like the changes;
+  /// [replace] runs in one transaction. The screens are told afterwards.
+  Future<void> replaceAll(Future<void> Function(Transaction tx) replace) =>
+      _queue(() async {
+        await _db.transaction(replace);
+        _changes.add(null);
+      });
+
   @override
   Future<String> readAttachment(String id) => _queue(() async {
     final rows = await _db.query(

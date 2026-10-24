@@ -4,7 +4,9 @@ import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../models/hotel_data.dart';
 import '../models/issue.dart';
+import 'backup_screen.dart';
 import 'dashboard_screen.dart';
+import '../services/housekeeping_backup.dart';
 import 'issues_screen.dart';
 import '../models/dashboard_data.dart';
 import '../services/housekeeping_store.dart';
@@ -50,6 +52,20 @@ class StaffScreen extends StatelessWidget {
             'Chambres, agents et signalements en direct',
             Icons.space_dashboard_outlined,
             () => openDashboard(context, store),
+          ),
+        if (data.api case SqliteHousekeeping(
+          store: final HousekeepingStore store,
+        ))
+          (
+            'Sauvegardes',
+            'Sauvegarder et partager les données du ménage',
+            Icons.backup_outlined,
+            () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => BackupScreen(backup: HousekeepingBackup(store)),
+              ),
+            ),
           ),
         (
           'Chambres',

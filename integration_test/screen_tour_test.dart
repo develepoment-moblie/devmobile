@@ -206,6 +206,9 @@ void main() {
     await tap(find.text('Tableau de bord'));
     await shot('manager_dashboard');
     await back();
+    await tap(find.text('Sauvegardes'));
+    await shot('manager_backups');
+    await back();
     await back();
     await signOut();
     await database.close();
