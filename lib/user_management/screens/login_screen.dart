@@ -14,7 +14,10 @@ import '../services/demo_staff_directory.dart';
 // (accounts, hashed passwords), keeping the same call: session.signIn(user).
 class LoginScreen extends StatefulWidget {
   final AppSession session;
-  const LoginScreen({super.key, required this.session});
+
+  /// Back to the real login with an account.
+  final VoidCallback? onAccounts;
+  const LoginScreen({super.key, required this.session, this.onAccounts});
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
@@ -129,6 +132,13 @@ class _LoginScreenState extends State<LoginScreen> {
                             : 'Entrer · ${person!.firstName}',
                       ),
                     ),
+                    if (widget.onAccounts != null) ...[
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: widget.onAccounts,
+                        child: const Text('Connexion avec un compte'),
+                      ),
+                    ],
                   ],
                 ),
               ),

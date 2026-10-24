@@ -205,6 +205,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       await tester.pumpWidget(NovaApp(session: session, key: UniqueKey()));
       await wait(1200);
+      await tapText('Comptes de test');
       await tapText(name);
       await tapText('Entrer · $name');
       await tapText('Chambres et ménage');
