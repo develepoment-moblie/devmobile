@@ -3,6 +3,7 @@ import '../main.dart';
 import '../models/app_user.dart';
 import '../services/auth_service.dart';
 import '../widgets/nova_logo.dart';
+import 'map_screen.dart'; // <-- ADDED: Import the map screen
 
 // ============ PALETTE ============
 const _cream      = Color(0xFFF6F1EA);
@@ -75,6 +76,17 @@ class _Header extends StatelessWidget {
           icon: Icons.notifications_none,
           onTap: () {},
         ),
+        const SizedBox(width: 8),
+        // --- ADDED: Map Button ---
+        _CircleIconButton(
+          icon: Icons.map_outlined,
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const MapScreen()),
+            );
+          },
+        ),
+        // -------------------------
         const SizedBox(width: 8),
         _CircleIconButton(
           icon: Icons.logout,
