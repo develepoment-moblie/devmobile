@@ -5,6 +5,7 @@ import '../shared/models/nova_module.dart';
 import '../shared/services/app_session.dart';
 import '../shared/services/staff_directory.dart';
 import 'screens/user_management_home_screen.dart';
+import 'accounts/screens/map_screen.dart';
 import 'accounts/services/auth_service.dart';
 import 'screens/account_gate.dart';
 import 'screens/profile_screen.dart';
@@ -63,4 +64,7 @@ class UserManagementModule extends NovaModule {
       AccountGate(session: session);
   Widget buildProfile(BuildContext context, AppSession session) =>
       ProfileScreen(session: session);
+  // Skander's Google Maps screen (hotel and nearby experiences), opened from
+  // the map button of the home bar.
+  Widget buildMap(BuildContext context) => const MapScreen();
 }

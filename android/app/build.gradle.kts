@@ -1,3 +1,12 @@
+import java.util.Properties
+
+// Google Maps key (user_management map screen): kept out of git, in
+// android/local.properties as MAPS_API_KEY=...
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -29,6 +38,7 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["MAPS_API_KEY"] = localProperties.getProperty("MAPS_API_KEY", "")
     }
 
     buildTypes {
