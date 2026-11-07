@@ -46,11 +46,3 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
-
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
-**/node_modules/
-**/.deno-cache/
-
-
