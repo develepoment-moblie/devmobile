@@ -1,32 +1,41 @@
 import 'package:flutter/material.dart';
 
 import '../../shared/custom/app_theme.dart';
-import '../models/hotel_data.dart';
-import '../models/room.dart';
 import 'draft_guard.dart';
 
-// Sends a problem to the maintenance module. Returns true once saved.
-class ReportProblemDialog extends StatefulWidget {
-  final HotelData data;
-  final Room room;
-  const ReportProblemDialog({
+// Asks for one text and runs [save] with it; stays open with the error if
+// saving fails. Returns true once saved.
+class TextPromptDialog extends StatefulWidget {
+  final String title, label, action;
+  final String? message, hint;
+  final int maxLength;
+  final bool required, destructive;
+  final Future<void> Function(String text) save;
+  const TextPromptDialog({
     super.key,
-    required this.data,
-    required this.room,
+    required this.title,
+    required this.label,
+    required this.action,
+    required this.save,
+    this.message,
+    this.hint,
+    this.maxLength = 300,
+    this.required = true,
+    this.destructive = false,
   });
   @override
-  State<ReportProblemDialog> createState() => _ReportProblemDialogState();
+  State<TextPromptDialog> createState() => _TextPromptDialogState();
 }
 
-class _ReportProblemDialogState extends State<ReportProblemDialog> {
+class _TextPromptDialogState extends State<TextPromptDialog> {
   final _form = GlobalKey<FormState>();
-  final _description = TextEditingController();
-  bool _urgent = false, _busy = false;
+  final _text = TextEditingController();
+  bool _busy = false;
   String? _error;
 
   @override
   void dispose() {
-    _description.dispose();
+    _text.dispose();
     super.dispose();
   }
 
@@ -37,13 +46,9 @@ class _ReportProblemDialogState extends State<ReportProblemDialog> {
       _error = null;
     });
     try {
-      await widget.data.reportProblem(
-        widget.room,
-        _description.text.trim(),
-        _urgent,
-      );
+      await widget.save(_text.text.trim());
       if (!mounted) return;
-      _description.clear();
+      _text.clear();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Navigator.pop(context, true);
       });
@@ -56,11 +61,11 @@ class _ReportProblemDialogState extends State<ReportProblemDialog> {
 
   @override
   Widget build(BuildContext context) => DraftGuard(
-    dirty: _description.text.isNotEmpty,
+    dirty: _text.text.isNotEmpty,
     busy: _busy,
     child: AlertDialog(
       scrollable: true,
-      title: Text('Signaler un problème · ${widget.room.number}'),
+      title: Text(widget.title),
       content: Form(
         key: _form,
         onChanged: () => setState(() {}),
@@ -68,13 +73,13 @@ class _ReportProblemDialogState extends State<ReportProblemDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              widget.room.status == RoomStatus.occupied
-                  ? 'La chambre reste occupée. La maintenance est prévenue.'
-                  : 'La chambre passe en maintenance jusqu’à la fin de l’intervention.',
-              style: const TextStyle(color: AppColors.muted, fontSize: 12),
-            ),
-            const SizedBox(height: 12),
+            if (widget.message != null) ...[
+              Text(
+                widget.message!,
+                style: const TextStyle(color: AppColors.muted, fontSize: 12.5),
+              ),
+              const SizedBox(height: 12),
+            ],
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -87,26 +92,21 @@ class _ReportProblemDialogState extends State<ReportProblemDialog> {
                 ),
               ),
             TextFormField(
-              controller: _description,
+              controller: _text,
               enabled: !_busy,
               autofocus: true,
-              maxLength: 300,
+              maxLength: widget.maxLength,
               maxLines: 3,
               minLines: 1,
               textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(
-                labelText: 'Problème constaté',
-                hintText: 'Climatisation, plomberie, électricité…',
+              decoration: InputDecoration(
+                labelText: widget.label,
+                hintText: widget.hint,
               ),
-              validator: (v) => v == null || v.trim().isEmpty
-                  ? 'Décrivez le problème.'
+              validator: (v) =>
+                  widget.required && (v == null || v.trim().isEmpty)
+                  ? 'Ce champ est obligatoire.'
                   : null,
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _urgent,
-              onChanged: _busy ? null : (v) => setState(() => _urgent = v),
-              title: const Text('Urgent'),
             ),
           ],
         ),
@@ -117,8 +117,11 @@ class _ReportProblemDialogState extends State<ReportProblemDialog> {
           child: const Text('Annuler'),
         ),
         FilledButton(
+          style: widget.destructive
+              ? FilledButton.styleFrom(backgroundColor: AppColors.red)
+              : null,
           onPressed: _busy ? null : _save,
-          child: const Text('Signaler'),
+          child: Text(widget.action),
         ),
       ],
     ),

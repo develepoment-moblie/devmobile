@@ -10,11 +10,15 @@ class NovaHeader extends StatelessWidget {
 
   /// Shown as a back arrow before the logo, to leave the module.
   final VoidCallback? onBack;
+
+  /// Opens the room QR code scanner.
+  final VoidCallback? onScan;
   const NovaHeader({
     super.key,
     required this.onNotifications,
     required this.unread,
     this.onBack,
+    this.onScan,
   });
   @override
   Widget build(BuildContext context) => Padding(
@@ -32,6 +36,25 @@ class NovaHeader extends StatelessWidget {
           const Expanded(
             child: Align(alignment: Alignment.centerLeft, child: NovaBrand()),
           ),
+          if (onScan != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: IconButton(
+                onPressed: onScan,
+                tooltip: 'Scanner une chambre',
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(13),
+                    side: const BorderSide(color: AppColors.border),
+                  ),
+                ),
+                icon: const Icon(
+                  Icons.qr_code_scanner,
+                  color: Color(0xFF49605A),
+                ),
+              ),
+            ),
           IconButton(
             onPressed: onNotifications,
             tooltip: 'Notifications',

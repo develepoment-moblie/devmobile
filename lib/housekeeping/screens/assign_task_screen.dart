@@ -36,7 +36,7 @@ class _AssignTaskScreenState extends State<AssignTaskScreen> {
   void loadRoom(Room? value) {
     room = value;
     expectedVersion = value?.version;
-    employee = widget.data.isConnected ? value?.employeeId : value?.employee;
+    employee = value?.employeeId;
     urgent = value?.urgent ?? false;
     noteController.text = value?.note ?? '';
     initialEmployee = employee;
@@ -75,11 +75,7 @@ class _AssignTaskScreenState extends State<AssignTaskScreen> {
                       r.cleaning == CleaningStatus.inProgress),
         )
         .toList();
-    final options = Map<String, String>.from(
-      widget.data.isConnected
-          ? widget.data.agentOptions
-          : {for (final name in widget.data.employees) name: name},
-    );
+    final options = Map<String, String>.from(widget.data.agentOptions);
     if (employee != null && !options.containsKey(employee)) {
       options[employee!] = 'Agent indisponible';
     }
@@ -146,17 +142,16 @@ class _AssignTaskScreenState extends State<AssignTaskScreen> {
                     .map(
                       (agent) => DropdownMenuItem(
                         value: agent.key,
-                        enabled:
-                            !widget.data.isConnected ||
-                            widget.data.agentOptions.containsKey(agent.key),
+                        enabled: widget.data.agentOptions.containsKey(
+                          agent.key,
+                        ),
                         child: Text(agent.value),
                       ),
                     )
                     .toList(),
                 validator: (value) => value == null
                     ? 'Choisissez un agent.'
-                    : widget.data.isConnected &&
-                          !widget.data.agentOptions.containsKey(value)
+                    : !widget.data.agentOptions.containsKey(value)
                     ? 'Cet agent n’est plus disponible. Choisissez un autre agent.'
                     : null,
                 onChanged: saving

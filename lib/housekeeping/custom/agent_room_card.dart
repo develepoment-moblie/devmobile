@@ -66,9 +66,53 @@ class AgentRoomCard extends StatelessWidget {
                 '${room.category} · Étage ${room.floor}',
                 style: const TextStyle(fontSize: 12),
               ),
+              if (priorityBadge(room.priority) case final badge?) ...[
+                const SizedBox(height: 8),
+                badge,
+              ],
+              if (room.timerState == 'running') ...[
+                const SizedBox(height: 6),
+                const Text(
+                  'Minuteur en cours',
+                  style: TextStyle(
+                    color: AppColors.green,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12.5,
+                  ),
+                ),
+              ],
+              if (room.stayover) ...[
+                const SizedBox(height: 6),
+                const Text(
+                  'Recouche · le client garde la chambre',
+                  style: TextStyle(
+                    color: AppColors.goldDeep,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12.5,
+                  ),
+                ),
+              ],
               if (room.note.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(room.note),
+              ],
+              if (room.feedback != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.redLight,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'À reprendre : ${room.feedback}',
+                    style: const TextStyle(
+                      color: AppColors.red,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
               ],
               const SizedBox(height: 12),
               if (room.cleaning == CleaningStatus.inProgress) ...[

@@ -9,10 +9,21 @@ import '../custom/roomcard.dart';
 import '../models/hotel_data.dart';
 import '../models/room.dart';
 import 'assign_task_screen.dart';
+import 'inspection_history_screen.dart';
+import 'inspection_screen.dart';
+import 'issues_screen.dart';
+import 'minibar_screen.dart';
+import '../models/inventory.dart';
+import '../custom/quantity_lines_dialog.dart';
+import 'report_issue_screen.dart';
 import 'task_photo_screen.dart';
 import '../custom/add_room_task_dialog.dart';
+import '../custom/cleaning_timer_card.dart';
+import '../services/auto_assignment.dart';
 import '../custom/draft_guard.dart';
-import '../custom/report_problem_dialog.dart';
+import '../custom/lost_item_dialog.dart';
+import '../custom/room_qr.dart';
+import '../custom/text_prompt_dialog.dart';
 
 class DetailsScreen extends StatefulWidget {
   final HotelData data;
@@ -98,12 +109,91 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Future<void> report() async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => ReportProblemDialog(data: widget.data, room: widget.room),
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReportIssueScreen(data: widget.data, room: widget.room),
+      ),
     );
     if (mounted && saved == true) {
       showFeedback(context, 'Problème signalé à la maintenance');
+    }
+  }
+
+  Future<void> prompt(TextPromptDialog dialog, String done) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => dialog,
+    );
+    if (mounted && saved == true) showFeedback(context, done);
+  }
+
+  Future<void> inspect() async {
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => InspectionScreen(data: widget.data, room: widget.room),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  Future<void> requestStayover() => prompt(
+    TextPromptDialog(
+      title: 'Demander une recouche',
+      label: 'Consigne (facultatif)',
+      hint: 'Client absent jusqu’à 15 h…',
+      message: 'La chambre reste occupée. Attribuez ensuite le nettoyage à un agent.',
+      action: 'Demander',
+      required: false,
+      maxLength: 200,
+      save: (note) => widget.data.setStayover(widget.room, true, note: note),
+    ),
+    'Recouche demandée',
+  );
+
+  // Items used in the room: logged per room and floor, out of the stock.
+  Future<void> useItems() async {
+    final items = widget.data.roomSupplies;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => QuantityLinesDialog(
+        title: 'Articles utilisés · ${widget.room.number}',
+        action: 'Enregistrer',
+        message: 'Retirés du stock et notés dans le journal de la chambre.',
+        lines: [
+          for (final s in items)
+            QuantityLine(
+              s.id,
+              s.name,
+              detail: '${s.quantity} ${s.unit} en stock',
+              max: s.quantity,
+            ),
+        ],
+        save: (q, _) async {
+          for (final s in items) {
+            if (q[s.id] case final n?) {
+              await widget.data.useSupply(s, widget.room, n);
+            }
+          }
+        },
+      ),
+    );
+    if (mounted && saved == true) {
+      showFeedback(context, 'Utilisation enregistrée');
+    }
+  }
+
+  Future<void> lostItem() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => LostItemDialog(data: widget.data, room: widget.room),
+    );
+    if (mounted && saved == true) {
+      showFeedback(context, 'Objet enregistré · la gouvernante est prévenue');
     }
   }
 
@@ -147,7 +237,23 @@ class _DetailsScreenState extends State<DetailsScreen> {
       dirty: false,
       busy: saving,
       child: Scaffold(
-        appBar: AppBar(title: Text('Chambre ${room.number}')),
+        appBar: AppBar(
+          title: Text('Chambre ${room.number}'),
+          actions: [
+            if (data.isSupervisor)
+              IconButton(
+                tooltip: 'QR code de la chambre',
+                icon: const Icon(Icons.qr_code_2),
+                onPressed: () => showDialog<void>(
+                  context: context,
+                  builder: (_) => RoomQrDialog(
+                    number: room.number,
+                    category: room.category,
+                  ),
+                ),
+              ),
+          ],
+        ),
         body: ListView(
           padding: const EdgeInsets.all(18),
           children: [
@@ -174,13 +280,91 @@ class _DetailsScreenState extends State<DetailsScreen> {
                     color: color,
                     background: background,
                   ),
+                if (room.stayover)
+                  const StatusBadge(
+                    'Recouche',
+                    color: AppColors.goldDeep,
+                    background: Color(0xFFF6EEDC),
+                  ),
               ],
             ),
+            if (room.feedback != null) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.redLight,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: AppColors.red.withValues(alpha: .25),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.replay_rounded, color: AppColors.red),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'À reprendre',
+                            style: TextStyle(
+                              color: AppColors.red,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(room.feedback!),
+                          if (data.sentBack(room) case final round?)
+                            for (final item in round.failed) ...[
+                              const SizedBox(height: 8),
+                              FailedItemRow(
+                                data: data,
+                                round: round,
+                                item: item,
+                              ),
+                            ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (room.needsCleaning) CleaningTimerCard(data: data, room: room),
+            if (data.isSupervisor &&
+                (room.needsCleaning || room.status == RoomStatus.occupied)) ...[
+              const SizedBox(height: 16),
+              const Text(
+                'Priorité du nettoyage',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final p in CleaningPriority.values)
+                    ChoiceChip(
+                      label: Text(p.label),
+                      selected: room.priority == p.name,
+                      onSelected: saving || room.priority == p.name
+                          ? null
+                          : (_) => action(
+                              () => data.setPriority(room, p),
+                              'Priorité : ${p.label}',
+                            ),
+                    ),
+                ],
+              ),
+            ],
             const SizedBox(height: 20),
             Text(
-              room.employee == null
+              room.employeeId == null
                   ? 'Aucun agent attribué'
-                  : 'Agent d’étage · ${room.employee}',
+                  : 'Agent d’étage · ${room.employee ?? 'Agent indisponible'}',
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
             if (room.note.isNotEmpty) ...[
@@ -293,7 +477,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                   (room.cleaning == CleaningStatus.waiting ||
                       room.cleaning == CleaningStatus.inProgress))
                 NovaButton(
-                  room.employee == null
+                  room.employeeId == null
                       ? 'Attribuer une tâche'
                       : 'Modifier l’attribution',
                   symbol: NovaSymbol.person,
@@ -304,7 +488,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 const SizedBox(height: 12),
                 OutlinedButton(
                   onPressed:
-                      saving || !data.canClean(room) || room.employee == null
+                      saving || !data.canClean(room) || room.employeeId == null
                       ? null
                       : () => action(
                           () => data.startCleaning(room),
@@ -312,7 +496,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         ),
                   child: const Text('Commencer le nettoyage'),
                 ),
-                if (room.employee == null)
+                if (room.employeeId == null)
                   const Text(
                     'Attribuez un agent avant de commencer.',
                     style: TextStyle(fontSize: 11, color: AppColors.muted),
@@ -346,14 +530,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 const SizedBox(height: 12),
                 if (data.isSupervisor)
                   NovaButton(
-                    'Valider le nettoyage',
+                    'Inspecter le nettoyage',
                     symbol: NovaSymbol.check,
-                    onPressed:
-                        !saving && data.isSupervisor && room.checklistComplete
-                        ? () => action(
-                            () => data.approve(room),
-                            'Nettoyage validé · chambre libre',
-                          )
+                    onPressed: !saving && room.checklistComplete
+                        ? inspect
                         : null,
                   ),
                 if (!data.isSupervisor)
@@ -368,20 +548,129 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 'Chambre prête',
                 'Le nettoyage a été validé. La chambre est disponible.',
               ),
-            if (room.status == RoomStatus.occupied)
+            if (room.status == RoomStatus.occupied && !room.stayover) ...[
               const Text(
                 'Chambre occupée. Le départ du client, enregistré par la réception, la remettra au ménage.',
               ),
-            if (room.status == RoomStatus.maintenance)
-              const Text(
-                'Chambre indisponible pendant l’intervention de maintenance.',
+              if (data.canRequestStayover(room)) ...[
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: saving ? null : requestStayover,
+                  icon: const Icon(Icons.bed_outlined),
+                  label: const Text('Demander une recouche'),
+                ),
+              ],
+            ],
+            if (room.stayover &&
+                data.canRequestStayover(room) &&
+                room.cleaning == CleaningStatus.waiting) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: saving
+                    ? null
+                    : () => action(
+                        () => data.setStayover(room, false),
+                        'Recouche annulée',
+                      ),
+                icon: const Icon(Icons.close),
+                label: const Text('Annuler la recouche'),
               ),
+            ],
+            if (room.status == RoomStatus.maintenance)
+              Text(
+                data.resolvedIssueOf(room) == null
+                    ? 'Chambre hors service pendant l’intervention de maintenance.'
+                    : 'Intervention terminée. Remettez la chambre à nettoyer pour la rendre aux clients.',
+              ),
+            if (data.resolvedIssueOf(room) case final issue?) ...[
+              const SizedBox(height: 12),
+              NovaButton(
+                'Remettre à nettoyer',
+                onPressed: saving
+                    ? null
+                    : () => action(
+                        () => data.bringBack(issue),
+                        'Chambre remise à nettoyer',
+                      ),
+              ),
+            ],
             if (data.canReport(room)) ...[
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: saving ? null : report,
                 icon: const Icon(Icons.build_outlined, size: 18),
                 label: const Text('Signaler un problème'),
+              ),
+            ],
+            if (data.isSupervisor || data.canClean(room)) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: saving ? null : useItems,
+                    icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                    label: const Text('Utiliser des articles'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: saving
+                        ? null
+                        : () => Navigator.push(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  MinibarRoomScreen(data: data, room: room),
+                            ),
+                          ),
+                    icon: const Icon(Icons.local_bar_outlined, size: 18),
+                    label: Text(
+                      'Minibar${data.minibarOf(room.number).where((e) => e.status == MinibarStatus.pending).isEmpty ? '' : ' · ${data.minibarOf(room.number).where((e) => e.status == MinibarStatus.pending).length} en attente'}',
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (data.canRecordLostItem(room)) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: saving ? null : lostItem,
+                icon: const Icon(Icons.search, size: 18),
+                label: const Text('Objet trouvé'),
+              ),
+            ],
+            if (data.openIssuesOf(room.number).isNotEmpty) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        IssuesScreen(data: data, roomNumber: room.number),
+                  ),
+                ),
+                icon: const Icon(Icons.report_outlined),
+                label: Text(
+                  'Signalements en cours · ${data.openIssuesOf(room.number).length}',
+                ),
+              ),
+            ],
+            if (data.inspectionsOf(room.number).isNotEmpty) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => InspectionHistoryScreen(
+                      data: data,
+                      roomNumber: room.number,
+                    ),
+                  ),
+                ),
+                icon: const Icon(Icons.fact_check_outlined),
+                label: Text(
+                  'Inspections · ${data.inspectionsOf(room.number).length}',
+                ),
               ),
             ],
             const SizedBox(height: 28),

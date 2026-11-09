@@ -1,5 +1,8 @@
 import 'dart:math';
 
+import 'inspection_scoring.dart';
+import 'notification_rules.dart';
+
 // Small state changes shared by user actions and by other modules' events.
 // They work on the persisted room shape read by HousekeepingStore.
 
@@ -11,6 +14,7 @@ void resetCleaning(Map<String, dynamic> room) {
   room['employeeId'] = null;
   room['approvedBy'] = null;
   room['urgent'] = false;
+  room['feedback'] = null;
   room['checklist'] = List.filled((room['tasks'] as List).length, false);
   for (final task in room['tasks'] as List) {
     task['photoId'] = null;
@@ -23,19 +27,25 @@ void addHistory(Map<String, dynamic> room, String entry) =>
 void bumpVersion(Map<String, dynamic> room) =>
     room['version'] = (room['version'] as int) + 1;
 
+/// [recipient] limits the notification to one account (e.g. the agent whose
+/// supply request changed).
 void addNotification(
   Map<String, dynamic> state, {
   required String title,
   required String message,
   required String roomNumber,
   String audience = 'all',
+  String? recipient,
+  String? category,
 }) => (state['notifications'] as List).insert(0, {
   'id':
-      '$roomNumber-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}',
+      '${roomNumber.isEmpty ? 'stock' : roomNumber}-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}',
   'title': title,
   'message': message,
   'roomNumber': roomNumber,
   'audience': audience,
+  'recipient': recipient,
+  'category': category ?? categoryForTitle(title),
 });
 
 Map<String, dynamic>? activeRoom(Map<String, dynamic> state, String number) =>
@@ -43,3 +53,58 @@ Map<String, dynamic>? activeRoom(Map<String, dynamic> state, String number) =>
         .cast<Map<String, dynamic>>()
         .where((r) => r['number'] == number)
         .firstOrNull;
+
+/// A room the cleaning workflow applies to: dirty, or occupied with a
+/// requested recouche (daily cleaning while the guest stays).
+bool cleanable(Map<String, dynamic> room) =>
+    room['status'] == 'dirty' ||
+    (room['status'] == 'occupied' && room['stayover'] == true);
+
+/// The room's current cleaning in the log (not yet approved), if any.
+Map<String, dynamic>? openCleaning(Map<String, dynamic> state, String number) =>
+    (state['cleanings'] as List? ?? [])
+        .cast<Map<String, dynamic>>()
+        .where((c) => c['room_number'] == number && c['approved_at'] == null)
+        .lastOrNull;
+
+/// Forgets an unfinished cleaning when the room's situation changes.
+void dropOpenCleaning(Map<String, dynamic> state, String number) {
+  final cleanings = state['cleanings'] as List? ?? [];
+  final dropped = {
+    for (final c in cleanings)
+      if (c['room_number'] == number && c['approved_at'] == null) c['id'],
+  };
+  cleanings.removeWhere((c) => dropped.contains(c['id']));
+  // Their timers go with them.
+  (state['timerSegments'] as List? ?? []).removeWhere(
+    (t) => dropped.contains(t['cleaning_id']),
+  );
+}
+
+/// Sets a category's inspection threshold and item weights (supervisor in
+/// the housekeeping rules, Manager in the catalog: same checks).
+void setInspectionRules(
+  Map<String, dynamic> state,
+  String category,
+  Map<String, dynamic> body,
+  Never Function(String message, [int status]) fail,
+) {
+  final reason = invalidRules(body['threshold'], body['weights']);
+  if (reason != null) fail(reason);
+  final rules =
+      state.putIfAbsent('inspectionRules', () => <String, dynamic>{}) as Map;
+  final current = rules[category] as Map?;
+  if (current != null &&
+      body['version'] != null &&
+      body['version'] != current['version']) {
+    fail('Ce barème a changé. Actualisez.', 409);
+  }
+  rules[category] = {
+    'threshold': body['threshold'],
+    'weights': {
+      for (final e in (body['weights'] as Map).entries)
+        (e.key as String).trim(): e.value,
+    },
+    'version': ((current?['version'] as int?) ?? 0) + 1,
+  };
+}

@@ -6,8 +6,6 @@ import 'package:nova_paris/housekeeping/services/app_exception.dart';
 import 'package:nova_paris/housekeeping/services/hotel_event_handlers.dart';
 import 'package:nova_paris/housekeeping/services/housekeeping_store.dart';
 import 'package:nova_paris/housekeeping/services/room_catalog_backend.dart';
-import 'package:nova_paris/housekeeping/services/sqlite_housekeeping.dart';
-import 'package:nova_paris/housekeeping/services/sqlite_room_catalog.dart';
 import 'package:nova_paris/shared/models/app_user.dart';
 import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_events.dart';
@@ -17,6 +15,8 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'photo_fixture.dart';
+import 'schema_downgrade.dart';
+import 'test_backends.dart';
 
 // Fictional team, independent of the user_management module.
 class TestStaff implements StaffDirectory {
@@ -42,8 +42,8 @@ void main() {
   late String path;
   late AppSession session;
   late HousekeepingStore store;
-  late SqliteHousekeeping backend;
-  late SqliteRoomCatalog catalog;
+  late TestHousekeeping backend;
+  late TestCatalog catalog;
   final emitted = <AppEvent>[];
   final denied = throwsA(isA<AppServiceException>());
 
@@ -57,8 +57,8 @@ void main() {
     session.events.on<AppEvent>().listen(emitted.add);
     store = HousekeepingStore(session);
     listenToHotelEvents(session.events, store);
-    backend = SqliteHousekeeping(store, events: session.events);
-    catalog = SqliteRoomCatalog(store);
+    backend = TestHousekeeping(store, events: session.events);
+    catalog = TestCatalog(store);
   }
 
   Future<void> reopen() async {
@@ -115,18 +115,180 @@ void main() {
       'housekeeping_supplies',
       'housekeeping_notifications',
       'housekeeping_notification_reads',
+      'housekeeping_cleanings',
+      'housekeeping_lost_items',
+      'housekeeping_category_tasks',
+      'housekeeping_floors',
+      'housekeeping_timer_segments',
+      'housekeeping_category_estimates',
+      'housekeeping_availability',
+      'housekeeping_mutations',
+      'housekeeping_inspections',
+      'housekeeping_inspection_items',
+      'housekeeping_inspection_rules',
+      'housekeeping_issues',
+      'housekeeping_issue_photos',
+      'housekeeping_lost_item_events',
+      'housekeeping_settings',
+      'housekeeping_stock_movements',
+      'housekeeping_laundry_batches',
+      'housekeeping_laundry_lines',
+      'housekeeping_supply_requests',
+      'housekeeping_supply_request_lines',
+      'housekeeping_minibar_consumptions',
+      'housekeeping_stays',
+      'housekeeping_notification_prefs',
     });
-    expect(await session.database.versionOf('housekeeping'), 1);
+    expect(await session.database.versionOf('housekeeping'), 7);
     login('amina');
     final state = await backend.snapshot();
     expect((state['rooms'] as List), hasLength(16));
-    expect((state['supplies'] as List), hasLength(5));
+    expect(
+      (state['supplies'] as List),
+      hasLength(8),
+      reason: "5 items + 3 minibar items",
+    );
     expect(
       (state['staff'] as List).map((s) => s['id']),
       containsAll(['amina', 'sarah', 'lina', 'youssef']),
     );
     expect((await room('109'))['cleaning'], 'waiting');
     expect(state.containsKey('users'), isFalse);
+  });
+
+  test(
+    'the empty-hotel build option starts with nothing; the admin adds rooms',
+    () async {
+      final empty = housekeepingSeedState(samples: false);
+      for (final key in [
+        'rooms',
+        'roomArchives',
+        'supplies',
+        'notifications',
+      ]) {
+        expect(empty[key], isEmpty, reason: key);
+      }
+      await session.database.close();
+      final database = await AppDatabase.open(
+        schemas: [
+          ModuleSchema(
+            module: 'housekeeping',
+            version: 1,
+            migrate: (tx, from, to) async {
+              await housekeepingSchema.migrate(tx, from, to);
+              for (final table in [
+                'housekeeping_notifications',
+                'housekeeping_supplies',
+                'housekeeping_rooms',
+              ]) {
+                await tx.delete(table);
+              }
+            },
+          ),
+        ],
+        factory: databaseFactoryFfi,
+        path: p.join(directory.path, 'empty.db'),
+      );
+      session = AppSession(database: database, staff: TestStaff());
+      store = HousekeepingStore(session);
+      catalog = TestCatalog(store);
+      session.signIn(
+        const AppUser(id: 'admin', fullName: 'Admin', role: AppRole.admin),
+      );
+      expect((await catalog.snapshot()).rooms, isEmpty);
+      await catalog.mutate(RoomCatalogAction.create, {
+        'number': '101',
+        'category': 'Chambre Deluxe',
+      });
+      expect((await catalog.snapshot()).rooms.single.number, '101');
+    },
+  );
+
+  test(
+    'a version 1 database (phones already installed) upgrades in place',
+    () async {
+      login('amina');
+      await action(
+        'assign',
+        number: '305',
+        extra: {'employeeId': 'sarah', 'note': 'Avant midi', 'urgent': true},
+      );
+      final db = session.database.database;
+      await dropVersion5(db);
+      for (final table in [
+        'housekeeping_cleanings',
+        'housekeeping_lost_items',
+        'housekeeping_category_tasks',
+        'housekeeping_floors',
+        'housekeeping_timer_segments',
+        'housekeeping_category_estimates',
+        'housekeeping_availability',
+        'housekeeping_mutations',
+        'housekeeping_inspection_items',
+        'housekeeping_inspections',
+        'housekeeping_inspection_rules',
+      ]) {
+        await db.execute('DROP TABLE $table');
+      }
+      for (final column in ['feedback', 'stayover', 'priority']) {
+        await db.execute('ALTER TABLE housekeeping_rooms DROP COLUMN $column');
+      }
+      await db.update('module_versions', {
+        'version': 1,
+      }, where: "module = 'housekeeping'");
+      await reopen();
+      expect(await session.database.versionOf('housekeeping'), 7);
+      final kept = await room('305');
+      expect((kept['employeeId'], kept['note']), ('sarah', 'Avant midi'));
+      expect((kept['stayover'], kept['feedback']), (false, null));
+      login('sarah');
+      await action('start', number: '305');
+      expect((await room('305'))['cleaning'], 'inProgress');
+    },
+  );
+
+  test('a version 2 database upgrades in place', () async {
+    login('amina');
+    await action(
+      'assign',
+      number: '305',
+      extra: {'employeeId': 'sarah', 'note': 'VIP', 'urgent': true},
+    );
+    final db = session.database.database;
+    await dropVersion5(db);
+    for (final table in [
+      'housekeeping_timer_segments',
+      'housekeeping_category_estimates',
+      'housekeeping_availability',
+      'housekeeping_mutations',
+      'housekeeping_inspection_items',
+      'housekeeping_inspections',
+      'housekeeping_inspection_rules',
+    ]) {
+      await db.execute('DROP TABLE $table');
+    }
+    await db.execute('ALTER TABLE housekeeping_rooms DROP COLUMN priority');
+    for (final column in [
+      'finished_at',
+      'duration_ms',
+      'inspection_score',
+      'inspection_rounds',
+    ]) {
+      await db.execute(
+        'ALTER TABLE housekeeping_cleanings DROP COLUMN $column',
+      );
+    }
+    await db.update('module_versions', {
+      'version': 2,
+    }, where: "module = 'housekeeping'");
+    await reopen();
+    expect(await session.database.versionOf('housekeeping'), 7);
+    final kept = await room('305');
+    expect((kept['employeeId'], kept['priority']), ('sarah', 'normal'));
+    expect((await store.readState())['cleanings'], hasLength(1));
+    login('sarah');
+    await action('start', number: '305');
+    expect((await room('305'))['cleaning'], 'inProgress');
   });
 
   test('full cleaning cycle persists and announces the ready room', () async {
@@ -304,6 +466,48 @@ void main() {
     expect(supplies.firstWhere((s) => s['id'] == 'cleaner')['quantity'], 10);
   });
 
+  test('low stock alerts the supervisor once each time an item crosses its minimum', () async {
+    login('amina');
+    Future<void> move(String id, int delta) async {
+      final supplies = (await store.readState())['supplies'] as List;
+      final s = supplies.firstWhere((s) => s['id'] == id);
+      await backend.mutate('/v1/supplies/$id/movement', {
+        'version': s['version'],
+        'delta': delta,
+      });
+    }
+
+    Future<List<String>> alerts() async => [
+      for (final n in (await backend.snapshot())['notifications'] as List)
+        if ('${n['title']}'.contains('tock')) '${n['title']} | ${n['message']}',
+    ];
+
+    // Draps propres: 42, minimum 15.
+    await move('sheets', -20);
+    expect(await alerts(), isEmpty);
+    await move('sheets', -7);
+    expect(await alerts(), [
+      'Stock bas | Draps propres : il reste 15 pièces (minimum 15). Pensez à réapprovisionner.',
+    ]);
+    await move('sheets', -5);
+    expect(await alerts(), hasLength(1), reason: 'already below the minimum');
+    await move('sheets', 30);
+    await move('sheets', -40);
+    final all = await alerts();
+    expect(all, hasLength(2));
+    expect(
+      all.first,
+      startsWith('Rupture de stock | Draps propres : stock épuisé'),
+    );
+    final notes = (await backend.snapshot())['notifications'] as List;
+    expect(notes.first['roomNumber'], '');
+    expect(notes.first['audience'], 'supervisor');
+
+    login('sarah');
+    final forAgent = (await backend.snapshot())['notifications'] as List;
+    expect(forAgent.any((n) => '${n['title']}'.contains('tock')), isFalse);
+  });
+
   test('notification reads belong to each user', () async {
     login('amina');
     final ids = [
@@ -399,7 +603,8 @@ void main() {
     expect((await room('305'))['status'], 'maintenance');
     session.events.emit(const MaintenanceResolved('305'));
     await settle();
-    expect((await room('305'))['status'], 'dirty');
+    // Out of service until the supervisor brings it back to cleaning.
+    expect((await room('305'))['status'], 'maintenance');
 
     login('sarah');
     await expectLater(
