@@ -6,6 +6,7 @@ Updated after each change in this chat. Latest changes first.
 - Merged merge-user-chambres into gestion-clients and kept both the Cuisine and Administrateur test accounts.
 - Account creation and role changes now use the shared role list, including Reception, Kitchen and floor agents.
 - Existing demo IDs and guest-services data are retained; real accounts have separate identities and require their own room associations.
+- Verified account roles and directory filtering with real SQLite accounts in an isolated test database. Analysis clean; 183 tests passed, with two Housekeeping golden tests reporting rounded-edge pixel differences. App not launched.
 
 ## 2026-11-07 Kitchen preparation queue
 - Kitchen sees accepted orders and preparation notes, marks orders ready for delivery, and still has access to stock.

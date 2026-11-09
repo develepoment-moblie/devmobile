@@ -1,7 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nova_paris/shared/models/app_user.dart' show AppRole;
 import 'package:nova_paris/user_management/accounts/models/app_user.dart';
 import 'package:nova_paris/user_management/accounts/services/database_helper.dart';
 import 'package:nova_paris/user_management/accounts/services/password_hash.dart';
+import 'package:nova_paris/user_management/screens/account_gate.dart';
+import 'package:nova_paris/user_management/services/accounts_staff_directory.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -27,8 +32,14 @@ void main() {
   });
 
   test('a version 6 database with plain-text passwords is upgraded', () async {
-    final path = p.join(await getDatabasesPath(), 'nova_paris.db');
-    await deleteDatabase(path);
+    final directory = await Directory.systemTemp.createTemp('nova_accounts_');
+    final previousPath = await getDatabasesPath();
+    await databaseFactory.setDatabasesPath(directory.path);
+    addTearDown(() async {
+      await databaseFactory.setDatabasesPath(previousPath);
+      await directory.delete(recursive: true);
+    });
+    final path = p.join(directory.path, 'nova_paris.db');
     final old = await openDatabase(
       path,
       version: 6,
@@ -98,6 +109,27 @@ void main() {
     await helper.resetPassword('sarah@nova.test', 'nouveau-1');
     expect(await helper.login('sarah@nova.test', 'menage-2026'), isNull);
     expect(await helper.login('sarah@nova.test', 'nouveau-1'), isNotNull);
+
+    for (final role in [AppRole.receptionist, AppRole.kitchen, AppRole.staff]) {
+      final email = '$role@nova.test';
+      await helper.insertUser(
+        AppUser(
+          id: '0',
+          fullName: email,
+          displayName: 'Test $role',
+          role: role,
+          points: 0,
+        ),
+        'service-2026',
+      );
+      final account = (await helper.login(email, 'service-2026'))!;
+      final user = sessionUser(account);
+      expect(user.role, role);
+      expect(user.id, 'account-${account.id}');
+      final roster = await const AccountsStaffDirectory().users(roles: {role});
+      expect(roster.where((entry) => entry.id == user.id).single.role, role);
+      expect(roster.every((entry) => entry.role == role), isTrue);
+    }
     await db.close();
   });
 }
