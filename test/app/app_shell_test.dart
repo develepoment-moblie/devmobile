@@ -81,6 +81,11 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(NovaApp(session: session));
+    // The real login comes first; the test accounts are one tap away.
+    expect(find.text('Comptes de test'), findsOneWidget);
+    await tester.ensureVisible(find.text('Comptes de test'));
+    await tester.tap(find.text('Comptes de test'));
+    await tester.pumpAndSettle();
     expect(find.text('Qui êtes-vous ?'), findsOneWidget);
 
     await tester.tap(find.text('Entrer (mode test)'));
@@ -109,7 +114,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Se déconnecter'));
     await tester.pumpAndSettle();
-    expect(find.text('Qui êtes-vous ?'), findsOneWidget);
+    expect(find.text('Comptes de test'), findsOneWidget);
   });
 
   testWidgets('each role sees exactly the modules that declare it', (

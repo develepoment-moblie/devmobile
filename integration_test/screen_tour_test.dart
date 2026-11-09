@@ -101,6 +101,7 @@ void main() {
     }
 
     Future<void> signIn(String name) async {
+      await tap(find.text('Comptes de test'));
       await tap(find.text(name));
       await tap(find.text('Entrer · $name'));
       await shot('home_$name');

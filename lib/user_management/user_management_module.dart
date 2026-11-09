@@ -5,9 +5,11 @@ import '../shared/models/nova_module.dart';
 import '../shared/services/app_session.dart';
 import '../shared/services/staff_directory.dart';
 import 'screens/user_management_home_screen.dart';
-import 'screens/login_screen.dart';
+import 'accounts/screens/map_screen.dart';
+import 'accounts/services/auth_service.dart';
+import 'screens/account_gate.dart';
 import 'screens/profile_screen.dart';
-import 'services/demo_staff_directory.dart';
+import 'services/accounts_staff_directory.dart';
 
 // Entry point of the Utilisateurs module. Owner: Skander256.
 // Everything for this module lives in lib/user_management/. See lib/user_management/README.md.
@@ -43,13 +45,26 @@ class UserManagementModule extends NovaModule {
   Widget buildHome(BuildContext context, AppSession session) =>
       UserManagementHomeScreen(session: session);
 
-  // The hotel's staff list, given to every module as session.staff.
-  // TEMPORARY: replace with a directory reading real accounts.
-  StaffDirectory get staffDirectory => const DemoStaffDirectory();
+  // The hotel's staff list, given to every module as session.staff: the real
+  // accounts plus the test team.
+  StaffDirectory get staffDirectory => const AccountsStaffDirectory();
+
+  // Signing out of the app also forgets the remembered account.
+  @override
+  void attach(AppSession session) => session.addListener(() {
+    if (session.user == null) {
+      AuthService.logout().catchError(
+        (Object e) => debugPrint('user_management: déconnexion ($e)'),
+      );
+    }
+  });
 
   // Used by the app shell before anyone is signed in, and from the home bar.
   Widget buildLogin(BuildContext context, AppSession session) =>
-      LoginScreen(session: session);
+      AccountGate(session: session);
   Widget buildProfile(BuildContext context, AppSession session) =>
       ProfileScreen(session: session);
+  // Skander's Google Maps screen (hotel and nearby experiences), opened from
+  // the map button of the home bar.
+  Widget buildMap(BuildContext context) => const MapScreen();
 }
