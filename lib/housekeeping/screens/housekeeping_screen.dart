@@ -8,6 +8,7 @@ import '../custom/roomcard.dart';
 import '../models/hotel_data.dart';
 import '../models/room.dart';
 import 'assign_task_screen.dart';
+import 'auto_assign_screen.dart';
 import 'details_screen.dart';
 
 class HousekeepingScreen extends StatefulWidget {
@@ -154,6 +155,22 @@ class _HousekeepingScreenState extends State<HousekeepingScreen> {
                   },
           ),
         ),
+        if (data.isSupervisor) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: () async {
+              await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(builder: (_) => AutoAssignScreen(data: data)),
+              );
+              if (context.mounted) setState(() {});
+            },
+            icon: const Icon(Icons.auto_awesome),
+            label: Text(
+              'Attribution automatique · ${data.unassignedRooms.length} en attente',
+            ),
+          ),
+        ],
         if (!data.isSupervisor)
           const Padding(
             padding: EdgeInsets.only(top: 8),

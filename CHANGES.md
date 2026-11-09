@@ -2,6 +2,11 @@
 
 Updated after each change in this chat. Latest changes first.
 
+## 2026-11-09 Users and Housekeeping integration
+- Merged merge-user-chambres into gestion-clients and kept both the Cuisine and Administrateur test accounts.
+- Account creation and role changes now use the shared role list, including Reception, Kitchen and floor agents.
+- Existing demo IDs and guest-services data are retained; real accounts have separate identities and require their own room associations.
+
 ## 2026-11-07 Kitchen preparation queue
 - Kitchen sees accepted orders and preparation notes, marks orders ready for delivery, and still has access to stock.
 - Reception, guests, and assigned agents see the ready status. Delivery confirmation is gated on kitchen readiness for the current workflow.

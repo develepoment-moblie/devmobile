@@ -13,6 +13,11 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
+  # user_management: Google Maps screen (Carte)
+  google_maps_flutter: ^2.9.0
+  geolocator: ^13.0.1
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   sqflite: ^2.4.4+2
   path: ^1.9.1
@@ -20,6 +25,22 @@ dependencies:
   image_picker: ^1.2.4
   image: ^4.12.0
   pointycastle: ^4.0.0
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.4.2
+  flutter_local_notifications: ^22.3.2
+  # housekeeping: voice note on a problem report (record, play back, app folder)
+  record: ^7.1.2
+  audioplayers: ^6.8.1
+  path_provider: ^2.1.6
+  # housekeeping: late-cleaning alert delivered by Android when the app is closed
+  timezone: ^0.11.0
+  # housekeeping: share a backup (Drive, e-mail) and choose one to restore
+  share_plus: ^13.3.1
+  file_picker: ^13.2.0
+  # user_management (Skander): remembered session, Google sign-in, password reset e-mail
+  shared_preferences: ^2.5.6
+  google_sign_in: ^6.2.1
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

@@ -3,6 +3,16 @@ import 'package:flutter/material.dart';
 import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../models/hotel_data.dart';
+import '../models/issue.dart';
+import 'backup_screen.dart';
+import 'dashboard_screen.dart';
+import '../services/housekeeping_backup.dart';
+import 'issues_screen.dart';
+import '../models/dashboard_data.dart';
+import '../services/housekeeping_store.dart';
+import '../services/sqlite_housekeeping.dart';
+import 'lost_items_screen.dart';
+import 'stats_screen.dart';
 
 class StaffScreen extends StatelessWidget {
   final HotelData data;
@@ -34,6 +44,29 @@ class StaffScreen extends StatelessWidget {
       ),
       const SizedBox(height: 12),
       ...[
+        if (data.api case SqliteHousekeeping(
+          store: final HousekeepingStore store,
+        ))
+          (
+            'Tableau de bord',
+            'Chambres, agents et signalements en direct',
+            Icons.space_dashboard_outlined,
+            () => openDashboard(context, store),
+          ),
+        if (data.api case SqliteHousekeeping(
+          store: final HousekeepingStore store,
+        ))
+          (
+            'Sauvegardes',
+            'Sauvegarder et partager les données du ménage',
+            Icons.backup_outlined,
+            () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => BackupScreen(backup: HousekeepingBackup(store)),
+              ),
+            ),
+          ),
         (
           'Chambres',
           '${data.rooms.length} chambres',
@@ -57,6 +90,35 @@ class StaffScreen extends StatelessWidget {
           '${data.supplies.where((s) => s.isLow).length} stock bas',
           Icons.inventory_2_outlined,
           () => navigate(3),
+        ),
+        (
+          'Signalements',
+          '${data.issues.where((i) => i.status == IssueStatus.open).length} en attente · ${data.issues.where((i) => i.status == IssueStatus.resolved).length} résolus',
+          Icons.report_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(builder: (_) => IssuesScreen(data: data)),
+          ),
+        ),
+        (
+          'Objets trouvés',
+          '${data.lostItems.where((i) => i.status.kept).length} à rendre',
+          Icons.search,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => LostItemsScreen(data: data),
+            ),
+          ),
+        ),
+        (
+          'Statistiques',
+          '${data.statsSince(DateTime.now().copyWith(hour: 0, minute: 0, second: 0, millisecond: 0, microsecond: 0)).approved} validés aujourd’hui',
+          Icons.insights_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(builder: (_) => StatsScreen(data: data)),
+          ),
         ),
       ].map(
         (item) => Card(
@@ -91,4 +153,15 @@ class StaffScreen extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// Opens the live dashboard; its controller lives as long as the screen.
+Future<void> openDashboard(BuildContext context, HousekeepingStore store) {
+  final dashboard = DashboardData(store);
+  return Navigator.push(
+    context,
+    MaterialPageRoute<void>(
+      builder: (_) => DashboardScreen(dashboard: dashboard),
+    ),
+  ).whenComplete(dashboard.dispose);
 }

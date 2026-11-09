@@ -76,6 +76,20 @@ class HomeShell extends StatelessWidget {
                         ),
                       ),
                       IconButton(
+                        tooltip: 'Carte',
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (context) =>
+                                userManagement.buildMap(context),
+                          ),
+                        ),
+                        icon: const Icon(
+                          Icons.map_outlined,
+                          color: Colors.white,
+                        ),
+                      ),
+                      IconButton(
                         tooltip: 'Mon profil',
                         onPressed: () => Navigator.push(
                           context,
