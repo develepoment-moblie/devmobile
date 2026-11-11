@@ -92,7 +92,7 @@ void main() {
   });
 
   test(
-    'pull gives the other phones\' actions in order, never your own',
+    "pull gives every action in the server's order, own ones included",
     () async {
       await push('phone-1', [action(a, '/v1/rooms/204/submit')]);
       await push('phone-2', [
@@ -100,31 +100,25 @@ void main() {
       ]);
       await push('phone-1', [action(c, '/v1/rooms/305/start')]);
 
-      final (_, forTwo) = await call(
+      // The phones rebuild their data in this order, their own actions too.
+      final (_, all) = await call(
         'GET',
         '/v1/sync/pull?since=0&device=phone-2&limit=50',
       );
-      expect([for (final m in forTwo['mutations']) m['mutationId']], [a, c]);
-      expect(forTwo['mutations'].first['body'], {
-        'mutationId': a,
-        'version': 1,
-      });
-      expect(forTwo['until'], 3);
-      expect(forTwo['more'], false);
+      expect([for (final m in all['mutations']) m['mutationId']], [a, b, c]);
+      expect([for (final m in all['mutations']) m['seq']], [1, 2, 3]);
+      expect(all['mutations'].first['body'], {'mutationId': a, 'version': 1});
+      expect(all['until'], 3);
+      expect(all['more'], false);
 
-      // Pages: the cursor moves past phone-1's own actions too.
-      final (_, page) = await call(
-        'GET',
-        '/v1/sync/pull?since=0&device=phone-1&limit=1',
-      );
-      expect(page['mutations'], isEmpty);
-      expect(page['until'], 1);
+      // Pages; device= is optional.
+      final (_, page) = await call('GET', '/v1/sync/pull?since=0&limit=2');
+      expect([for (final m in page['mutations']) m['mutationId']], [a, b]);
+      expect(page['until'], 2);
       expect(page['more'], true);
-      final (_, next) = await call(
-        'GET',
-        '/v1/sync/pull?since=1&device=phone-1&limit=1',
-      );
-      expect(next['mutations'].single['mutationId'], b);
+      final (_, next) = await call('GET', '/v1/sync/pull?since=2&limit=2');
+      expect(next['mutations'].single['mutationId'], c);
+      expect(next['more'], false);
     },
   );
 
@@ -149,8 +143,8 @@ void main() {
   });
 
   test('bad requests get a clear status', () async {
-    expect((await call('GET', '/v1/sync/pull?since=0')).$1, 400);
-    expect((await call('GET', '/v1/sync/pull?since=-1&device=x')).$1, 400);
+    expect((await call('GET', '/v1/sync/pull?since=-1')).$1, 400);
+    expect((await call('GET', '/v1/sync/pull?since=0&limit=500')).$1, 400);
     expect((await call('POST', '/v1/sync/push', {'deviceId': 'x'})).$1, 400);
     expect((await call('GET', '/v1/sync/push')).$1, 405);
     expect((await call('GET', '/v1/nothing')).$1, 404);

@@ -306,15 +306,19 @@ class HousekeepingBackup {
         );
       }
       // Sync: actions made after the backup are gone with the data, so they
-      // are not sent; the other phones' actions are replayed again from the
-      // start (the ones already in the backup change nothing).
+      // are not sent. The confirmed version starts again from the restored
+      // data and the server's list is read from the start (the actions
+      // already in the backup change nothing).
       await tx.delete('housekeeping_sync_outbox');
       await tx.delete('housekeeping_sync_conflicts');
+      await tx.delete('housekeeping_sync_base');
       await tx.insert('housekeeping_sync_state', {
         'key': 'last_seq',
         'value': '0',
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     });
+    // The restored data is the new starting point of the sync.
+    await store.ensureSyncBase(0, onlyWhenSyncing: true);
     final base = (await _appFolder()).path;
     for (final e in (backup['files'] as Map? ?? {}).entries) {
       final relative = e.key as String;

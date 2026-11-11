@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../shared/services/app_events.dart';
 import 'housekeeping_store.dart';
+import 'mutation_meta.dart';
 import 'inventory_rules.dart';
 import 'issue_rules.dart';
 import 'room_rules.dart';
@@ -20,7 +21,7 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
       final room = activeRoom(state, e.roomNumber);
       if (room == null || room['status'] == 'occupied') return;
       // Who is in the room: minibar charges belong to this stay.
-      checkIn(state, e.roomNumber, e.guestName, DateTime.now());
+      checkIn(state, e.roomNumber, e.guestName, mutationNow());
       room['status'] = 'occupied';
       room['priority'] = 'normal';
       resetCleaning(room);
@@ -35,7 +36,7 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
     (e) => _apply(store, (state) {
       final room = activeRoom(state, e.roomNumber);
       if (room == null) return;
-      checkOut(state, e.roomNumber, DateTime.now());
+      checkOut(state, e.roomNumber, mutationNow());
       if (room['status'] == 'maintenance') {
         addHistory(room, 'Départ du client · maintenance en cours');
       } else {
@@ -85,7 +86,7 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
           outOfService: outOfService,
           reportedBy: 'system',
           reportedByName: 'Autre module',
-          at: DateTime.now(),
+          at: mutationNow(),
         ),
       );
       addHistory(room, 'Problème signalé : ${e.description}');
@@ -106,7 +107,7 @@ List<StreamSubscription<AppEvent>> listenToHotelEvents(
     (e) => _apply(store, (state) {
       final room = activeRoom(state, e.roomNumber);
       if (room == null) return;
-      if (resolveIssues(state, e.roomNumber, DateTime.now()) == 0) return;
+      if (resolveIssues(state, e.roomNumber, mutationNow()) == 0) return;
       final outOfService = room['status'] == 'maintenance';
       addHistory(room, 'Intervention terminée (Maintenance)');
       addNotification(

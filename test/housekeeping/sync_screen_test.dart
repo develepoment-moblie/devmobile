@@ -90,7 +90,9 @@ void main() {
     );
 
     await tester.tap(find.text('Enregistrer'));
-    await settleUntil(tester, find.text('État'));
+    // Saved once the confirmed version of the sync exists.
+    await settleUntil(tester, find.text('Serveur enregistré'));
+    expect(find.text('État'), findsOneWidget);
     expect(find.text('Aucune action en attente'), findsOneWidget);
     expect(find.text('Jamais synchronisé'), findsOneWidget);
     expect(find.text('Aucun conflit'), findsOneWidget);
@@ -106,6 +108,8 @@ void main() {
     await tester.tap(find.text('Synchroniser'));
     await settleUntil(tester, find.text('Stock · création'));
     expect(find.text('Conflits · 1'), findsOneWidget);
+    expect(find.text('Actions d’autres téléphones refusées'), findsOneWidget);
+    expect(find.text('Vos actions refusées'), findsNothing);
     expect(
       find.textContaining('Stock réservé à la gouvernante.'),
       findsOneWidget,

@@ -141,8 +141,9 @@ void main() {
       'housekeeping_sync_outbox',
       'housekeeping_sync_state',
       'housekeeping_sync_conflicts',
+      'housekeeping_sync_base',
     });
-    expect(await session.database.versionOf('housekeeping'), 8);
+    expect(await session.database.versionOf('housekeeping'), 9);
     login('amina');
     final state = await backend.snapshot();
     expect((state['rooms'] as List), hasLength(16));
@@ -240,7 +241,7 @@ void main() {
         'version': 1,
       }, where: "module = 'housekeeping'");
       await reopen();
-      expect(await session.database.versionOf('housekeeping'), 8);
+      expect(await session.database.versionOf('housekeeping'), 9);
       final kept = await room('305');
       expect((kept['employeeId'], kept['note']), ('sarah', 'Avant midi'));
       expect((kept['stayover'], kept['feedback']), (false, null));
@@ -285,7 +286,7 @@ void main() {
       'version': 2,
     }, where: "module = 'housekeeping'");
     await reopen();
-    expect(await session.database.versionOf('housekeeping'), 8);
+    expect(await session.database.versionOf('housekeeping'), 9);
     final kept = await room('305');
     expect((kept['employeeId'], kept['priority']), ('sarah', 'normal'));
     expect((await store.readState())['cleanings'], hasLength(1));

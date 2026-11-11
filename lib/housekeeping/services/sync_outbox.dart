@@ -7,7 +7,7 @@
 const catalogPathPrefix = 'catalog/';
 
 /// Keys only the store reads; the screens never see them.
-const syncStateKeys = ['_syncOutbox', '_syncCursor'];
+const syncStateKeys = ['_syncOutbox'];
 
 /// Queues the action just applied, to be sent to the server.
 void queueForServer(
@@ -23,7 +23,3 @@ void queueForServer(
   'actorId': actorId,
   'appliedAt': appliedAt.toIso8601String(),
 });
-
-/// Marks the server's action [seq] as handled, with the change it made.
-void advanceSyncCursor(Map<String, dynamic> state, int seq) =>
-    state['_syncCursor'] = seq;

@@ -13,13 +13,14 @@ import 'inventory_rules.dart';
 import 'issue_rules.dart';
 import 'local_attachment_store.dart';
 import 'local_session_store.dart';
+import 'mutation_meta.dart';
 import 'notification_rules.dart';
 
 // The module's tables, all prefixed housekeeping_. Bump [version] and add a
 // step to [migrate] for every change; never edit a step already pushed.
 final housekeepingSchema = ModuleSchema(
   module: 'housekeeping',
-  version: 8,
+  version: 9,
   migrate: (tx, from, to) async {
     if (from < 1) {
       await tx.execute('''CREATE TABLE housekeeping_rooms (
@@ -331,6 +332,42 @@ final housekeepingSchema = ModuleSchema(
         status INTEGER, received_at TEXT NOT NULL)''',
       );
     }
+    if (from < 9) {
+      // The server's order decides (see sync_rebase.dart). Written so it can
+      // run twice: a restore keeps the phone's sync tables.
+      // The confirmed version: every numbered action applied in order.
+      await tx.execute('''CREATE TABLE IF NOT EXISTS housekeeping_sync_base (
+        id INTEGER PRIMARY KEY CHECK(id = 1), seq INTEGER NOT NULL,
+        state TEXT NOT NULL, photos TEXT NOT NULL)''');
+      // Sent actions stay queued until the server's list confirms them.
+      await tx.execute('''CREATE TABLE housekeeping_sync_outbox_v9 (
+        mutation_id TEXT PRIMARY KEY, path TEXT NOT NULL, body TEXT NOT NULL,
+        actor_id TEXT NOT NULL, applied_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending','sent','rejected')),
+        attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT)''');
+      await tx.execute(
+        'INSERT INTO housekeeping_sync_outbox_v9 SELECT mutation_id, path, '
+        'body, actor_id, applied_at, created_at, status, attempts, last_error '
+        'FROM housekeeping_sync_outbox',
+      );
+      await tx.execute('DROP TABLE housekeeping_sync_outbox');
+      await tx.execute(
+        'ALTER TABLE housekeeping_sync_outbox_v9 '
+        'RENAME TO housekeeping_sync_outbox',
+      );
+      // A refused action of this phone ("Vos actions refusées").
+      final columns = await tx.rawQuery(
+        'PRAGMA table_info(housekeeping_sync_conflicts)',
+      );
+      if (!columns.any((c) => c['name'] == 'own')) {
+        await tx.execute(
+          'ALTER TABLE housekeeping_sync_conflicts '
+          'ADD COLUMN own INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+    }
     // A new install gets its starting data once every table exists.
     if (from < 1) {
       await HousekeepingStore._write(tx, housekeepingSeedState());
@@ -496,15 +533,151 @@ class HousekeepingStore
   }
 
   /// A change made on behalf of another module (an event), without a user.
+  /// Like [localChange], it goes into the confirmed version too.
   Future<void> systemChange(void Function(Map<String, dynamic>) action) =>
       _queue(() async {
-        await _db.transaction((tx) async {
-          final state = await _read(tx, const []);
-          action(state);
-          await _write(tx, state);
-        });
+        await _db.transaction((tx) => _applyLocal(tx, const [], action));
         _changes.add(null);
       });
+
+  /// A rule of the module run on this phone, with no client mutation id
+  /// (late cleanings, archiving of found items). Applied to the data and to
+  /// the confirmed version of the sync, so a rebuild does not lose it.
+  Future<void> localChange(void Function(Map<String, dynamic>) action) {
+    final user = session.user;
+    return _queue(() async {
+      final staff = await _staff();
+      await _db.transaction((tx) async {
+        if (session.user?.id != user?.id) {
+          fail('Session modifiée. Réessayez.', 409);
+        }
+        await _applyLocal(tx, staff, action);
+      });
+      _changes.add(null);
+    });
+  }
+
+  // Both versions get the same ids and time (same seed). The confirmed
+  // version goes first: what the rule returns comes from the phone's data.
+  static Future<void> _applyLocal(
+    Transaction tx,
+    List<AppUser> staff,
+    void Function(Map<String, dynamic>) action,
+  ) async {
+    final seed = uuidV4();
+    final now = DateTime.now();
+    final state = await _read(tx, staff);
+    final base = await loadSyncBase(tx);
+    if (base != null) {
+      base.state['users'] = state['users'];
+      try {
+        inMutation(seed, now, () => action(base.state));
+        await saveSyncBase(tx, base.state, base.seq);
+      } on AppServiceException {
+        // Not applicable to the confirmed version: the phone's data still
+        // changes.
+      }
+    }
+    inMutation(seed, now, () => action(state));
+    await _write(tx, state);
+  }
+
+  // ------------------------------------------------------------------ sync
+
+  /// The confirmed version of the sync (null until a server is set).
+  static Future<SyncBase?> loadSyncBase(DatabaseExecutor tx) async {
+    final rows = await tx.query('housekeeping_sync_base');
+    if (rows.isEmpty) return null;
+    return SyncBase(
+      (jsonDecode(rows.single['state'] as String) as Map)
+          .cast<String, dynamic>(),
+      rows.single['seq'] as int,
+    );
+  }
+
+  /// Saves the confirmed version; its new photos go to housekeeping_photos.
+  static Future<void> saveSyncBase(
+    DatabaseExecutor tx,
+    Map<String, dynamic> state,
+    int seq,
+  ) async {
+    final clean = {
+      for (final e in state.entries)
+        if (e.key != 'users' && !e.key.startsWith('_')) e.key: e.value,
+    };
+    await _savePhotos(tx, state['_photoWrites'] as Map?);
+    await tx.insert('housekeeping_sync_base', {
+      'id': 1,
+      'seq': seq,
+      'state': jsonEncode(clean),
+      'photos': jsonEncode(photoIds(clean).toList()),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// The confirmed version starts as the data on this phone: when a server
+  /// is set, and after a restore when the phone syncs ([onlyWhenSyncing]).
+  Future<void> ensureSyncBase(int seq, {bool onlyWhenSyncing = false}) =>
+      _queue(() async {
+        final staff = await _staff();
+        await _db.transaction((tx) async {
+          if (await loadSyncBase(tx) != null) return;
+          if (onlyWhenSyncing &&
+              (await tx.query(
+                'housekeeping_sync_state',
+                where: "key = 'server_url'",
+              )).isEmpty) {
+            return;
+          }
+          await saveSyncBase(tx, await _read(tx, staff), seq);
+        });
+      });
+
+  /// Rebuilds the data from the server's order, in one transaction:
+  /// [rebuild] gets the current data and saves the new versions (see
+  /// HousekeepingSync). The screens are told afterwards.
+  Future<T> rebuild<T>(
+    Future<T> Function(Transaction tx, Map<String, dynamic> current) rebuild,
+  ) => _queue(() async {
+    final staff = await _staff();
+    final result = await _db.transaction(
+      (tx) async => rebuild(tx, await _read(tx, staff)),
+    );
+    _changes.add(null);
+    return result;
+  });
+
+  /// Writes [state] as the data on this phone (sync rebuild). The logs that
+  /// otherwise only grow lose the rows [state] no longer has (a refused
+  /// action of this phone).
+  static Future<void> writeState(
+    DatabaseExecutor tx,
+    Map<String, dynamic> state,
+  ) async {
+    Future<void> prune(String table, Iterable<Object?> keep) async {
+      final ids = keep.toSet();
+      for (final row in await tx.query(table, columns: ['id'])) {
+        if (!ids.contains(row['id'])) {
+          await tx.delete(table, where: 'id = ?', whereArgs: [row['id']]);
+        }
+      }
+    }
+
+    // Items of an inspection go with it (ON DELETE CASCADE).
+    await prune('housekeeping_inspections', [
+      for (final i in state['inspections'] as List? ?? []) i['id'],
+    ]);
+    await prune('housekeeping_lost_item_events', [
+      for (final item in state['lostItems'] as List? ?? [])
+        for (final e in item['events'] as List? ?? []) e['id'],
+    ]);
+    await prune('housekeeping_stock_movements', [
+      for (final m in state['stockMovements'] as List? ?? []) m['id'],
+    ]);
+    await prune('housekeeping_mutations', [
+      for (final m in state['mutations'] as List? ?? []) m['id'],
+    ]);
+    await _write(tx, state);
+  }
 
   /// Reads and writes the sync tables, queued like the changes but without
   /// telling the screens (the sync bookkeeping is not housekeeping data).
@@ -1290,8 +1463,8 @@ class HousekeepingStore
         });
       }
     }
-    // Sync: the action just applied goes in the outbox, and a replayed
-    // action moves the cursor, in the same transaction as the change.
+    // Sync: the action just applied goes in the outbox, in the same
+    // transaction as the change.
     for (final m in state.remove('_syncOutbox') as List? ?? []) {
       await tx.insert('housekeeping_sync_outbox', {
         'mutation_id': m['mutationId'],
@@ -1302,35 +1475,16 @@ class HousekeepingStore
         'created_at': m['appliedAt'],
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
-    final cursor = state.remove('_syncCursor');
-    if (cursor is int) {
-      await tx.insert('housekeeping_sync_state', {
-        'key': 'last_seq',
-        'value': '$cursor',
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-    }
-    final photos = state.remove('_photoWrites') as Map? ?? {};
-    for (final entry in photos.entries) {
-      await tx.insert('housekeeping_photos', {
-        'id': entry.key,
-        'data': entry.value,
-      }, conflictAlgorithm: ConflictAlgorithm.ignore);
-    }
-    // Photos no task refers to any more are deleted.
+    await _savePhotos(tx, state.remove('_photoWrites') as Map?);
+    // Photos nothing refers to any more are deleted; the confirmed version
+    // of the sync still counts (a rebuild may bring them back).
     final referenced = {
-      for (final room in [
-        ...state['rooms'] as List,
-        ...state['roomArchives'] as List,
-      ])
-        for (final task in room['tasks'] as List? ?? [])
-          if (task['photoId'] is String) task['photoId'] as String,
-      for (final item in state['lostItems'] as List? ?? [])
-        if (item['photo_id'] is String) item['photo_id'] as String,
-      for (final inspection in state['inspections'] as List? ?? [])
-        for (final item in inspection['items'] as List? ?? [])
-          if (item['photo_id'] is String) item['photo_id'] as String,
-      for (final issue in state['issues'] as List? ?? [])
-        for (final id in issue['photos'] as List? ?? []) id as String,
+      ...photoIds(state),
+      for (final row in await tx.query(
+        'housekeeping_sync_base',
+        columns: ['photos'],
+      ))
+        ...(jsonDecode(row['photos'] as String) as List).cast<String>(),
     };
     for (final photo in await tx.query(
       'housekeeping_photos',
@@ -1345,4 +1499,37 @@ class HousekeepingStore
       }
     }
   }
+
+  static Future<void> _savePhotos(DatabaseExecutor tx, Map? photos) async {
+    for (final entry in (photos ?? const {}).entries) {
+      await tx.insert('housekeeping_photos', {
+        'id': entry.key,
+        'data': entry.value,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+  }
+
+  /// The photos [state] refers to (tasks, found items, inspections, reports).
+  static Set<String> photoIds(Map<String, dynamic> state) => {
+    for (final room in [
+      ...state['rooms'] as List? ?? [],
+      ...state['roomArchives'] as List? ?? [],
+    ])
+      for (final task in room['tasks'] as List? ?? [])
+        if (task['photoId'] is String) task['photoId'] as String,
+    for (final item in state['lostItems'] as List? ?? [])
+      if (item['photo_id'] is String) item['photo_id'] as String,
+    for (final inspection in state['inspections'] as List? ?? [])
+      for (final item in inspection['items'] as List? ?? [])
+        if (item['photo_id'] is String) item['photo_id'] as String,
+    for (final issue in state['issues'] as List? ?? [])
+      for (final id in issue['photos'] as List? ?? []) id as String,
+  };
+}
+
+/// The confirmed version of the sync and the last server number in it.
+class SyncBase {
+  final Map<String, dynamic> state;
+  final int seq;
+  SyncBase(this.state, this.seq);
 }

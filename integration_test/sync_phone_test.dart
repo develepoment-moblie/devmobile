@@ -254,11 +254,12 @@ void main() {
 
     await step(
       'conflict',
-      'Deux changements de la même chambre : un conflit visible, rien d’écrasé',
+      'Deux changements de la même chambre : l’ordre du serveur décide, '
+          'les trois téléphones finissent identiques',
       () async {
         await synced(manager);
         final version = (await manager.room('118'))['version'];
-        // The supervisor assigns 104 offline while the Manager changes it.
+        // The supervisor assigns 118 offline while the Manager changes it.
         await supervisor.sync.setServer(
           '${Uri.parse('http://$server').host}:9',
         );
@@ -274,20 +275,44 @@ void main() {
               'category': 'Suite $run',
               'version': version,
             });
-        await synced(manager);
-        await supervisor.sync.setServer(server);
-        await synced(supervisor);
-        final view = await supervisor.sync.refresh();
-        final conflict = view.conflicts
-            .where((c) => c.label == 'Catalogue · chambre modifiée')
-            .firstOrNull;
-        check(conflict != null, 'Aucun conflit');
         check(
           (await supervisor.room('118'))['employeeId'] == 'lina',
-          'Attribution écrasée',
+          'Attribution non affichée hors ligne',
         );
+        await synced(manager); // reaches the server first
+        await supervisor.sync.setServer(server);
+        await synced(supervisor); // second: refused by the rules
+        await synced(manager);
+        await synced(agent);
+        // The supervisor's phone undid her assignment and says why.
+        final view = await supervisor.sync.refresh();
+        final mine = view.conflicts
+            .where((c) => c.own && c.label == 'Chambre 118 · attribution')
+            .firstOrNull;
+        check(mine != null, 'Refus non signalé à la gouvernante');
+        for (final other in [manager, agent]) {
+          check(
+            (await other.sync.refresh()).conflicts.any(
+              (c) => c.mutationId == mine!.mutationId && !c.own,
+            ),
+            'Refus absent sur un autre téléphone',
+          );
+        }
+        // The three phones hold the same room 118.
+        final rooms = [
+          for (final p in [supervisor, manager, agent])
+            jsonEncode(await p.room('118')),
+        ];
+        check(rooms.toSet().length == 1, 'Chambre 118 différente : $rooms');
+        final room = await supervisor.room('118');
+        check(
+          room['category'] == 'Suite $run',
+          'Catégorie : ${room['category']}',
+        );
+        check(room['employeeId'] == null, 'Attribution restée');
         await screenshot('02_conflit', supervisor.sync);
-        return '« ${conflict!.message} » (${conflict.actorName})';
+        return 'Identique sur les 3 téléphones (${room['category']}, non '
+            'attribuée) · chez la gouvernante : « ${mine!.message} »';
       },
     );
 

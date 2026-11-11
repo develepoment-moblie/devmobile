@@ -424,7 +424,7 @@ void main() {
     }, where: "module = 'housekeeping'");
     await session.database.close();
     await open();
-    expect(await session.database.versionOf('housekeeping'), 8);
+    expect(await session.database.versionOf('housekeeping'), 9);
     expect((await latest('sarah', 'Tâche urgente'))!['category'], 'tasks');
     for (final id in ['sarah', 'amina']) {
       for (final n in await notesOf(id)) {

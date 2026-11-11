@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -98,9 +99,13 @@ void main() {
     await settleUntil(tester, find.text('Problème signalé à la maintenance'));
     // During the page transition the message can show on both pages.
     expect(find.text('Problème signalé à la maintenance'), findsWidgets);
-    final state = await tester.runAsync(
-      () => housekeepingStoreFor(session).readState(),
-    );
+    // Read like the screens do: reads queued by the screens (fake clock) may
+    // still be running, so both clocks have to move until ours is done.
+    Map<String, dynamic>? state;
+    unawaited(housekeepingStoreFor(session).readState().then((s) => state = s));
+    for (var i = 0; i < 100 && state == null; i++) {
+      await settle(tester);
+    }
     final room = (state!['rooms'] as List).firstWhere(
       (r) => r['number'] == '101',
     );

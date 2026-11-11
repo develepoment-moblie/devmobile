@@ -40,6 +40,18 @@ class _SyncScreenState extends State<SyncScreen>
     super.dispose();
   }
 
+  Widget _conflict(SyncConflict c) => _ConflictCard(
+    title: c.label,
+    subtitle:
+        '${c.actorName ?? 'Auteur inconnu'} · ${shortDate(c.appliedAt)}\n${c.message}',
+    onDismiss: busy
+        ? null
+        : () => run(
+            () => widget.sync.dismissConflict(c.mutationId),
+            'Conflit retiré',
+          ),
+  );
+
   Future<void> _test() => run(() async {
     setState(() => check = null);
     final message = await widget.sync.testConnection(address.text);
@@ -51,6 +63,8 @@ class _SyncScreenState extends State<SyncScreen>
     final sync = widget.sync;
     final view = sync.overview;
     final configured = view?.server != null;
+    final own = [...?view?.conflicts.where((c) => c.own)];
+    final others = [...?view?.conflicts.where((c) => !c.own)];
     return Scaffold(
       appBar: AppBar(title: const Text('Synchronisation')),
       body: ListView(
@@ -198,42 +212,72 @@ class _SyncScreenState extends State<SyncScreen>
             if (view.conflicts.isEmpty && view.rejected.isEmpty)
               const EmptyState(
                 'Aucun conflit',
-                'Une action d’un autre téléphone refusée ici (par exemple une chambre modifiée entre-temps) apparaîtra ici.',
+                'Quand deux téléphones changent la même chose, l’ordre d’arrivée au serveur décide. Une action refusée apparaîtra ici, sur tous les téléphones.',
               ),
-            for (final (i, c) in view.conflicts.indexed)
-              FadeSlideIn(
-                key: ValueKey(c.mutationId),
-                index: i,
-                child: _ConflictCard(
-                  title: c.label,
+            if (own.isNotEmpty || view.rejected.isNotEmpty) ...[
+              const _Heading(
+                'Vos actions refusées',
+                'Retirées de ce téléphone : refaites-les si besoin.',
+              ),
+              for (final (i, c) in own.indexed)
+                FadeSlideIn(
+                  key: ValueKey(c.mutationId),
+                  index: i,
+                  child: _conflict(c),
+                ),
+              for (final r in view.rejected)
+                _ConflictCard(
+                  key: ValueKey(r.mutationId),
+                  title: r.label,
                   subtitle:
-                      '${c.actorName ?? 'Auteur inconnu'} · ${shortDate(c.appliedAt)}\n${c.message}',
+                      'Refusée par le serveur · ${shortDate(r.appliedAt)}\n${r.error}',
                   onDismiss: busy
                       ? null
                       : () => run(
-                          () => sync.dismissConflict(c.mutationId),
-                          'Conflit retiré',
+                          () => sync.dismissRejected(r.mutationId),
+                          'Action retirée',
                         ),
                 ),
+            ],
+            if (others.isNotEmpty) ...[
+              const _Heading(
+                'Actions d’autres téléphones refusées',
+                'Arrivées au serveur après une autre modification.',
               ),
-            for (final r in view.rejected)
-              _ConflictCard(
-                key: ValueKey(r.mutationId),
-                title: r.label,
-                subtitle:
-                    'Refusée par le serveur · ${shortDate(r.appliedAt)}\n${r.error}',
-                onDismiss: busy
-                    ? null
-                    : () => run(
-                        () => sync.dismissRejected(r.mutationId),
-                        'Action retirée',
-                      ),
-              ),
+              for (final (i, c) in others.indexed)
+                FadeSlideIn(
+                  key: ValueKey(c.mutationId),
+                  index: i,
+                  child: _conflict(c),
+                ),
+            ],
           ],
         ],
       ),
     );
   }
+}
+
+class _Heading extends StatelessWidget {
+  final String title, hint;
+  const _Heading(this.title, this.hint);
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 6, bottom: 6),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+        ),
+        Text(
+          hint,
+          style: const TextStyle(color: AppColors.muted, fontSize: 12),
+        ),
+      ],
+    ),
+  );
 }
 
 class _Line extends StatelessWidget {

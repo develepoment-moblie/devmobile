@@ -16,6 +16,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'housekeeping_store_test.dart' show TestStaff;
+import 'schema_downgrade.dart';
 import 'test_backends.dart';
 
 /// The hotel server's contract (server/lib/sync_api.dart), in memory.
@@ -65,10 +66,8 @@ class FakeHotelServer {
       final limit = int.parse(q['limit']!);
       final page = log.where((m) => m['seq'] > since).take(limit).toList();
       return reply({
-        'mutations': [
-          for (final m in page)
-            if (m['device'] != q['device']) m,
-        ],
+        // Every action in order, the asking phone's own included.
+        'mutations': page,
         'until': page.isEmpty ? since : page.last['seq'],
         'more': page.length == limit,
       });
@@ -102,7 +101,14 @@ class Phone {
     : rules = TestHousekeeping(store),
       catalog = TestCatalog(store);
 
+  /// The same starting data for every phone of a test (in the hotel: the
+  /// same install, or the same backup restored).
+  static String? template;
+
   static Future<Phone> open(String path, FakeHotelServer server) async {
+    if (template != null && !File(path).existsSync()) {
+      File(template!).copySync(path);
+    }
     final database = await AppDatabase.open(
       schemas: [housekeepingSchema],
       factory: databaseFactoryFfi,
@@ -143,6 +149,11 @@ class Phone {
 
   Future<List<Map<String, Object?>>> outbox() =>
       session.database.database.query('housekeeping_sync_outbox');
+
+  /// The housekeeping data as the screens read it (staff list aside), to
+  /// compare phones.
+  Future<String> data() async =>
+      jsonEncode((await store.readState())..remove('users'));
 }
 
 void main() {
@@ -155,6 +166,13 @@ void main() {
   setUp(() async {
     directory = await Directory.systemTemp.createTemp('nova_sync_');
     server = FakeHotelServer();
+    Phone.template = p.join(directory.path, 'template.db');
+    final made = await AppDatabase.open(
+      schemas: [housekeepingSchema],
+      factory: databaseFactoryFfi,
+      path: Phone.template,
+    );
+    await made.close();
     agent = await Phone.open(p.join(directory.path, 'agent.db'), server)
       ..login('sarah');
     supervisor =
@@ -317,45 +335,229 @@ void main() {
       expect((await supervisor.room('901'))['category'], 'Suite');
     });
 
-    test(
-      'changes to the same room made offline end in a visible conflict',
-      () async {
-        final version = (await supervisor.room('305'))['version'];
-        // Both phones act on room 305 at the same version, without network.
-        server.online = false;
-        await supervisor.act('305', 'assign', {
-          'employeeId': 'lina',
-          'note': '',
-          'urgent': false,
-        });
-        final manager =
-            await Phone.open(p.join(directory.path, 'manager.db'), server)
-              ..login('manager');
-        addTearDown(() async {
-          manager.sync.dispose();
-          await manager.session.database.close();
-        });
-        await manager.catalog.mutate(RoomCatalogAction.update, {
-          'number': '305',
-          'category': 'Suite',
-          'version': version,
-        });
-        expect(await supervisor.sync.syncNow(), isFalse);
-        expect(supervisor.sync.phase, SyncPhase.offline);
+    test('two changes of the same room: the server\'s order decides, '
+        'every phone ends up with the same data', () async {
+      final manager =
+          await Phone.open(p.join(directory.path, 'manager.db'), server)
+            ..login('manager');
+      addTearDown(() async {
+        manager.sync.dispose();
+        await manager.session.database.close();
+      });
+      final version = (await supervisor.room('305'))['version'];
+      // The supervisor assigns 305 offline; meanwhile the Manager changes
+      // its category, from the same version.
+      server.online = false;
+      await supervisor.act('305', 'assign', {
+        'employeeId': 'lina',
+        'note': 'Hors ligne',
+        'urgent': false,
+      });
+      expect((await supervisor.room('305'))['employeeId'], 'lina');
+      expect(await supervisor.sync.syncNow(), isFalse);
+      server.online = true;
+      await manager.catalog.mutate(RoomCatalogAction.update, {
+        'number': '305',
+        'category': 'Suite',
+        'version': version,
+      });
+      await manager.sync.syncNow(); // #1 the Manager
+      await supervisor.sync.syncNow(); // #2 the supervisor, refused
+      await manager.sync.syncNow();
+      await agent.sync.syncNow();
 
-        server.online = true;
-        await manager.sync.syncNow();
-        await supervisor.sync.syncNow();
-        final view = await supervisor.sync.refresh();
+      // The supervisor's assignment is undone on her phone and explained.
+      final room = await supervisor.room('305');
+      expect(room['category'], 'Suite');
+      expect(room['employeeId'], isNull);
+      final mine = (await supervisor.sync.refresh()).conflicts.single;
+      expect(mine.own, isTrue);
+      expect(mine.label, 'Chambre 305 · attribution');
+      expect(mine.message, contains('changé'));
+      expect((await supervisor.sync.refresh()).pending, 0);
+      // The other phones list the same refusal, as another phone's.
+      for (final other in [manager, agent]) {
+        final c = (await other.sync.refresh()).conflicts.single;
+        expect(c.mutationId, mine.mutationId);
+        expect(c.own, isFalse);
+        expect(c.actorName, 'Amina');
+      }
+      // The three phones hold exactly the same data.
+      final reference = await manager.data();
+      expect(await supervisor.data(), reference);
+      expect(await agent.data(), reference);
+    });
+
+    test('phones that sync in different orders end up identical', () async {
+      final third = await Phone.open(p.join(directory.path, 'third.db'), server)
+        ..login('amina');
+      addTearDown(() async {
+        third.sync.dispose();
+        await third.session.database.close();
+      });
+      // Offline work on two supervisor phones, then each syncs in turn,
+      // several times, in a different order.
+      server.online = false;
+      await supervisor.act('305', 'assign', {
+        'employeeId': 'sarah',
+        'note': 'A',
+        'urgent': false,
+      });
+      await supervisor.rules.mutate('/v1/supplies/towels/movement', {
+        'version': 1,
+        'delta': -3,
+      });
+      await third.act('305', 'assign', {
+        'employeeId': 'lina',
+        'note': 'B',
+        'urgent': true,
+      });
+      await third.act('306', 'assign', {
+        'employeeId': 'lina',
+        'note': '',
+        'urgent': false,
+      });
+      await third.rules.mutate('/v1/supplies/towels/movement', {
+        'version': 1,
+        'delta': 10,
+      });
+      server.online = true;
+      for (final order in [
+        [third, supervisor, agent],
+        [agent, supervisor, third],
+        [supervisor, third, agent],
+      ]) {
+        for (final phone in order) {
+          expect(await phone.sync.syncNow(), isTrue);
+        }
+      }
+      final reference = await third.data();
+      expect(await supervisor.data(), reference);
+      expect(await agent.data(), reference);
+      // The third phone's work reached the server first: it stands.
+      expect((await agent.room('305'))['employeeId'], 'lina');
+      expect((await agent.room('306'))['employeeId'], 'lina');
+      final towels = (await agent.supplies()).firstWhere(
+        (s) => s['id'] == 'towels',
+      );
+      expect(towels['quantity'], 78, reason: '68 + 10; the -3 was refused');
+      expect(
+        [
+          for (final c in (await supervisor.sync.refresh()).conflicts)
+            if (c.own) c.label,
+        ],
+        unorderedEquals([
+          'Chambre 305 · attribution',
+          'Stock · mouvement de stock',
+        ]),
+      );
+    });
+
+    test('an action still waiting is applied again on top', () async {
+      // The agent works offline while the supervisor's actions reach the
+      // server: after the sync, both show.
+      await supervisor.act('305', 'assign', {
+        'employeeId': 'sarah',
+        'note': '',
+        'urgent': false,
+      });
+      await supervisor.sync.syncNow();
+      await agent.sync.syncNow();
+      server.online = false;
+      await agent.act('305', 'start');
+      expect(await agent.sync.syncNow(), isFalse);
+      server.online = true;
+      await supervisor.act('306', 'assign', {
+        'employeeId': 'lina',
+        'note': '',
+        'urgent': false,
+      });
+      await supervisor.sync.syncNow();
+      await agent.sync.syncNow();
+      expect((await agent.room('305'))['cleaning'], 'inProgress');
+      expect((await agent.room('306'))['employeeId'], 'lina');
+      expect((await agent.sync.refresh()).pending, 0);
+      expect((await agent.sync.refresh()).conflicts, isEmpty);
+      await supervisor.sync.syncNow();
+      expect(await supervisor.data(), await agent.data());
+    });
+
+    test(
+      'a change made by this phone\'s own rules survives a rebuild',
+      () async {
+        await supervisor.sync.syncNow(); // the confirmed version exists
+        // Like a check-out told by the reservations module.
+        await supervisor.store.systemChange((s) {
+          for (final r in s['rooms'] as List) {
+            if (r['number'] == '306') r['note'] = 'Départ client';
+          }
+        });
+        await agent.rules.mutate('/v1/notifications/read', {
+          'ids': ['vip305'],
+        });
+        await agent.sync.syncNow();
+        await supervisor.sync.syncNow(); // rebuilds with the agent's action
+        expect((await supervisor.room('306'))['note'], 'Départ client');
         expect(
-          view.conflicts.single.message,
-          'Cette chambre a changé. Actualisez.',
+          ((await supervisor.store.readState())['reads'] as Map)['sarah'],
+          ['vip305'],
         );
-        expect(view.conflicts.single.actorName, 'Manager Test');
-        expect(view.conflicts.single.label, 'Catalogue · chambre modifiée');
-        expect(view.pending, 0, reason: 'its own action was still sent');
       },
     );
+
+    test('a restore starts the confirmed version again', () async {
+      await supervisor.act('305', 'assign', {
+        'employeeId': 'sarah',
+        'note': '',
+        'urgent': false,
+      });
+      await supervisor.sync.syncNow();
+      final db = supervisor.session.database.database;
+      expect(await db.query('housekeeping_sync_base'), hasLength(1));
+      // What a restore does to the sync tables (housekeeping_backup.dart).
+      await db.delete('housekeeping_sync_base');
+      await db.update('housekeeping_sync_state', {
+        'value': '0',
+      }, where: "key = 'last_seq'");
+      expect(await supervisor.sync.syncNow(), isTrue);
+      expect(await db.query('housekeeping_sync_base'), hasLength(1));
+      expect((await supervisor.sync.refresh()).lastSeq, 1);
+      expect((await supervisor.room('305'))['employeeId'], 'sarah');
+      expect((await supervisor.sync.refresh()).conflicts, isEmpty);
+    });
+  });
+
+  test('a version 8 database upgrades in place, its queue kept', () async {
+    final path = p.join(directory.path, 'old.db');
+    var phone = await Phone.open(path, server)
+      ..login('amina');
+    await phone.act('305', 'assign', {
+      'employeeId': 'sarah',
+      'note': '',
+      'urgent': false,
+    });
+    final db = phone.session.database.database;
+    final queued = await phone.outbox();
+    await dropVersion9(db);
+    await db.insert('housekeeping_sync_outbox', queued.single);
+    await db.update('module_versions', {
+      'version': 8,
+    }, where: "module = 'housekeeping'");
+    phone.sync.dispose();
+    await phone.session.database.close();
+
+    phone = await Phone.open(path, server)
+      ..login('amina');
+    addTearDown(() async {
+      phone.sync.dispose();
+      await phone.session.database.close();
+    });
+    expect(await phone.session.database.versionOf('housekeeping'), 9);
+    expect(await phone.outbox(), hasLength(1));
+    expect((await phone.sync.refresh()).pending, 1);
+    expect(await phone.sync.syncNow(), isTrue);
+    expect(await phone.outbox(), isEmpty, reason: 'sent and confirmed');
+    expect((await phone.room('305'))['employeeId'], 'sarah');
   });
 
   group('network', () {

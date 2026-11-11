@@ -8,7 +8,7 @@ import 'sync_log.dart';
 //
 //   GET  /v1/health                         is the server up, how many actions
 //   POST /v1/sync/push                      a phone sends its queued actions
-//   GET  /v1/sync/pull?since=&device=&limit= the other phones' actions
+//   GET  /v1/sync/pull?since=&limit=       every action after since, in order
 //   GET  /v1/rooms/activity                 last action per room (browser)
 //
 // Requests and answers are JSON. A repeated mutationId is answered
@@ -43,16 +43,14 @@ Handler syncApi(SyncLog log) => (Request request) async {
     if (method == 'GET' && path == '/v1/sync/pull') {
       final q = request.url.queryParameters;
       final since = int.tryParse(q['since'] ?? '0');
-      final device = q['device'];
+      // device= (the asking phone) is accepted but not needed: every phone
+      // gets the whole list, its own actions included.
       final limit = int.tryParse(q['limit'] ?? '50');
       if (since == null || since < 0) return _error(400, 'since invalide.');
-      if (device == null || device.isEmpty) {
-        return _error(400, 'device requis.');
-      }
       if (limit == null || limit < 1 || limit > 200) {
         return _error(400, 'limit de 1 à 200.');
       }
-      final page = log.pull(since, device, limit);
+      final page = log.pull(since, limit);
       return _json({
         'mutations': page.mutations,
         'until': page.until,

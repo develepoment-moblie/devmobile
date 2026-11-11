@@ -124,18 +124,32 @@ d’abord : chaque action est enregistrée sur le téléphone, puis envoyée.
 - **File d’envoi** : une action nouvelle est mise dans
   `housekeeping_sync_outbox` dans la même transaction que l’action elle-même
   (`services/sync_outbox.dart`) ; une action refusée ne laisse rien.
-- **Synchroniser** (`services/housekeeping_sync.dart`) : d’abord
-  `GET /v1/sync/pull` (les actions des autres téléphones), rejouées une à une
-  par les mêmes règles, au nom de leur auteur (rôle relu dans `session.staff`,
-  droits, propriété, version) ; puis `POST /v1/sync/push` (la file).
+- **L’ordre du serveur décide** (`services/sync_rebase.dart`). Chaque
+  téléphone garde deux versions des données :
+  - la **version confirmée** (`housekeeping_sync_base`) : toutes les actions
+    numérotées par le serveur, appliquées dans son ordre par les mêmes
+    règles, au nom de leur auteur (rôle relu dans `session.staff`, droits,
+    propriété, version). Identique sur tous les téléphones ;
+  - **ce que montrent les écrans** : la version confirmée plus les actions de
+    ce téléphone pas encore numérotées, appliquées à nouveau par-dessus.
+- **Synchroniser** (`services/housekeeping_sync.dart`) : `POST /v1/sync/push`
+  (la file ; une action envoyée y reste, « envoyée », jusqu’à sa
+  confirmation), puis `GET /v1/sync/pull` (toutes les actions numérotées, y
+  compris celles de ce téléphone) et reconstruction en une transaction.
 - **Mêmes identifiants partout** : pendant une action, les identifiants créés
   et l’heure viennent de la modification (`inMutation` dans
   `mutation_meta.dart`) ; rejouée ailleurs, elle crée les mêmes lignes.
 - **Sans doublon** : un `mutationId` déjà appliqué ne change rien, sur le
   téléphone comme sur le serveur ; réessayer est donc sans risque.
-- **Conflits** : une action d’un autre téléphone refusée ici (par exemple une
-  version dépassée, 409) va dans `housekeeping_sync_conflicts` et s’affiche
-  dans « Synchronisation » ; elle n’écrase rien.
+- **Conflits** : une action que les règles refusent dans l’ordre du serveur
+  (par exemple une version dépassée, 409) est refusée sur tous les
+  téléphones. Celle de ce téléphone disparaît de ses écrans et s’affiche dans
+  « Vos actions refusées » ; celle d’un autre dans « Actions d’autres
+  téléphones refusées » (`housekeeping_sync_conflicts`).
+- **Règles locales** : les événements des autres modules, l’archivage des
+  objets trouvés et l’alerte de retard s’appliquent aux deux versions, dans
+  la même transaction (`HousekeepingStore.localChange`), pour qu’une
+  reconstruction ne les perde pas.
 - **Quand** : au démarrage, 2 s après chaque modification, toutes les 20 s,
   et sur « Synchroniser ». Sans réseau : nouvel essai après 5 s, 10 s, 20 s…
   jusqu’à 5 min.
@@ -147,7 +161,9 @@ d’abord : chaque action est enregistrée sur le téléphone, puis envoyée.
   172.16-31.x, 192.168.x, localhost), sinon HTTPS.
 - **Sauvegardes** : les tables `housekeeping_sync_*` appartiennent au
   téléphone ; une sauvegarde ne les contient pas. Une restauration vide la
-  file et rejoue les actions des autres téléphones depuis le début.
+  file ; les données restaurées deviennent la version confirmée et la liste
+  du serveur est relue depuis le début (les actions déjà présentes ne
+  changent rien).
 
 Limites : les fichiers des notes vocales ne sont pas envoyés (seul leur
 chemin) ; les photos voyagent dans l’action. Les événements des autres
@@ -179,12 +195,13 @@ services/
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
   housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
+  sync_rebase.dart              reconstruction dans l’ordre du serveur (version confirmée)
   sync_outbox.dart              file d’envoi remplie dans la transaction de l’action
   voice_notes.dart              enregistrement et lecture des notes vocales
   evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
 ```
 
-Tables (version 8) : `housekeeping_rooms`, `housekeeping_photos`,
+Tables (version 9) : `housekeeping_rooms`, `housekeeping_photos`,
 `housekeeping_supplies`, `housekeeping_notifications`,
 `housekeeping_notification_reads`, `housekeeping_cleanings` (journal des
 nettoyages : durée, score d’inspection), `housekeeping_timer_segments`,
@@ -200,5 +217,6 @@ objets trouvés), `housekeeping_settings` (délai d’archivage),
 `housekeeping_supply_requests`, `housekeeping_supply_request_lines`,
 `housekeeping_minibar_consumptions`, `housekeeping_stays`,
 `housekeeping_notification_prefs`, `housekeeping_sync_outbox`,
-`housekeeping_sync_state`, `housekeeping_sync_conflicts` (synchronisation).
+`housekeeping_sync_state`, `housekeeping_sync_conflicts`,
+`housekeeping_sync_base` (synchronisation).
 Une nouvelle installation reçoit des chambres et un stock fictifs.

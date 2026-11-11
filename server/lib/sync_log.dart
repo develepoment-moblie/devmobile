@@ -121,11 +121,11 @@ class SyncLog {
     return results;
   }
 
-  /// Up to [limit] actions after [since], without those [deviceId] sent.
-  /// [until] is the last seq looked at, so the phone moves past its own.
+  /// Up to [limit] actions after [since], in order, every phone's included:
+  /// the phones rebuild their data in this order, their own actions too.
+  /// [until] is the last seq returned.
   ({List<Map<String, Object?>> mutations, int until, bool more}) pull(
     int since,
-    String deviceId,
     int limit,
   ) {
     final rows = db.select(
@@ -135,15 +135,14 @@ class SyncLog {
     return (
       mutations: [
         for (final r in rows)
-          if (r['device_id'] != deviceId)
-            {
-              'seq': r['seq'],
-              'mutationId': r['mutation_id'],
-              'path': r['path'],
-              'body': jsonDecode(r['body'] as String),
-              'actorId': r['actor_id'],
-              'appliedAt': r['applied_at'],
-            },
+          {
+            'seq': r['seq'],
+            'mutationId': r['mutation_id'],
+            'path': r['path'],
+            'body': jsonDecode(r['body'] as String),
+            'actorId': r['actor_id'],
+            'appliedAt': r['applied_at'],
+          },
       ],
       until: rows.isEmpty ? since : rows.last['seq'] as int,
       more: rows.length == limit,

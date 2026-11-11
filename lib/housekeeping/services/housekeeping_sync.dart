@@ -8,22 +8,20 @@ import 'package:sqflite/sqflite.dart';
 
 import 'app_exception.dart';
 import 'housekeeping_store.dart';
-import 'local_session_store.dart';
 import 'mutation_meta.dart';
-import 'room_catalog_backend.dart';
-import 'sqlite_housekeeping.dart';
-import 'sqlite_room_catalog.dart';
 import 'sync_outbox.dart';
+import 'sync_rebase.dart';
 
 // Offline-first sync with the hotel server (server/ at the repo root).
 //
 // Every action is saved on the phone first and queued in
 // housekeeping_sync_outbox in the same transaction. A sync then:
-//  1. pulls the actions the other phones sent (GET /v1/sync/pull) and
-//     replays each one through the same rules, as its author (role,
-//     ownership and version checks). A refused one becomes a conflict;
-//  2. pushes this phone's queue (POST /v1/sync/push). An action the server
-//     accepted, or already had, leaves the queue.
+//  1. pushes the queue (POST /v1/sync/push); sent actions stay queued, as
+//     "sent", until the server's list confirms them;
+//  2. pulls the numbered actions (GET /v1/sync/pull), this phone's own
+//     included, and rebuilds the data in the server's order (sync_rebase.dart):
+//     the confirmed version moves forward, the actions still waiting are
+//     applied again on top. A refused action is refused on every phone alike.
 // Without network nothing is lost: the queue waits and the sync retries
 // with a growing delay. A repeated mutationId changes nothing, on the
 // phone as on the server, so retrying is always safe.
@@ -31,17 +29,20 @@ import 'sync_outbox.dart';
 /// How the sync is doing, for the badge and the Synchronisation screen.
 enum SyncPhase { off, idle, syncing, offline }
 
-/// An action of another phone the rules refused here.
+/// A numbered action the rules refused, in the server's order (refused on
+/// every phone alike). [own]: it was made on this phone.
 class SyncConflict {
   final String mutationId, path, message;
   final String? actorName;
   final DateTime appliedAt;
+  final bool own;
   const SyncConflict({
     required this.mutationId,
     required this.path,
     required this.message,
     required this.actorName,
     required this.appliedAt,
+    this.own = false,
   });
   String get label => describeSyncPath(path);
 }
@@ -324,7 +325,8 @@ class HousekeepingSync extends ChangeNotifier {
       final settings = await _settings(tx);
       final pending = Sqflite.firstIntValue(
         await tx.rawQuery(
-          "SELECT COUNT(*) FROM housekeeping_sync_outbox WHERE status = 'pending'",
+          "SELECT COUNT(*) FROM housekeeping_sync_outbox "
+          "WHERE status IN ('pending','sent')",
         ),
       )!;
       final rejected = await tx.query(
@@ -353,6 +355,7 @@ class HousekeepingSync extends ChangeNotifier {
               message: c['message'] as String,
               actorName: c['actor_name'] as String?,
               appliedAt: DateTime.parse(c['applied_at'] as String),
+              own: c['own'] == 1,
             ),
         ],
         rejected: [
@@ -395,11 +398,17 @@ class HousekeepingSync extends ChangeNotifier {
     await store.syncLedger((tx) async {
       final previous = (await _settings(tx))['server_url'];
       if (previous != server.toString()) {
+        // Another server: its list is read from the start, on top of the
+        // confirmed version (actions already in it change nothing).
         await _set(tx, 'last_seq', '0');
         await _set(tx, 'last_error', null);
+        await tx.update('housekeeping_sync_base', {'seq': 0});
       }
       await _set(tx, 'server_url', server.toString());
     });
+    // From now on, actions made here wait to be confirmed: the confirmed
+    // version starts as the data before them.
+    await store.ensureSyncBase((await refresh()).lastSeq);
     _failures = 0;
     phase = SyncPhase.idle;
     await refresh();
@@ -426,8 +435,8 @@ class HousekeepingSync extends ChangeNotifier {
     await refresh();
   }
 
-  /// Removes an action the server refused from the list (it stays applied
-  /// on this phone).
+  /// Removes an action the server refused (malformed) from the list; it was
+  /// already taken off this phone's data.
   Future<void> dismissRejected(String mutationId) async {
     await store.syncLedger(
       (tx) => tx.delete(
@@ -441,7 +450,7 @@ class HousekeepingSync extends ChangeNotifier {
 
   // ------------------------------------------------------------------ sync
 
-  /// Pulls then pushes. Returns false when the server could not be reached.
+  /// Pushes then pulls. Returns false when the server could not be reached.
   /// A call while a sync runs makes it run once more afterwards.
   Future<bool> syncNow() async {
     if (_disposed) return false;
@@ -469,8 +478,12 @@ class HousekeepingSync extends ChangeNotifier {
     phase = SyncPhase.syncing;
     _notify();
     try {
+      await store.ensureSyncBase(view.lastSeq);
+      if (await _push(server, view.deviceId)) {
+        // An action the server refused leaves this phone's data too.
+        await _rebuild(const [], view.lastSeq);
+      }
       await _pull(server, view.deviceId);
-      await _push(server, view.deviceId);
       _failures = 0;
       _retry?.cancel();
       _retry = null;
@@ -515,102 +528,107 @@ class HousekeepingSync extends ChangeNotifier {
           },
         ),
       );
-      final mutations = (page['mutations'] as List? ?? const [])
-          .cast<Map<String, dynamic>>();
-      for (final m in mutations) {
-        await _replay(m);
+      final List<SyncAction> numbered;
+      try {
+        numbered = [
+          for (final m in page['mutations'] as List? ?? const [])
+            SyncAction.fromJson((m as Map).cast<String, dynamic>()),
+        ];
+      } on TypeError {
+        throw const _Unreachable('Réponse illisible du serveur.');
       }
-      // The page may end with this phone's own actions, not sent back.
-      final until = page['until'];
-      if (until is int && until > since) {
-        await store.syncLedger((tx) async {
-          final current =
-              int.tryParse((await _settings(tx))['last_seq'] ?? '') ?? 0;
-          if (until > current) await _set(tx, 'last_seq', '$until');
-        });
+      final until = page['until'] is int ? page['until'] as int : since;
+      if (numbered.isNotEmpty || until > since) {
+        await _rebuild(numbered, until);
       }
       if (page['more'] != true) return;
     }
   }
 
-  /// Applies another phone's action here, through the same rules, as its
-  /// author. A refusal is kept as a conflict; either way the cursor moves on.
-  Future<void> _replay(Map<String, dynamic> m) async {
-    final seq = m['seq'] as int;
-    final id = m['mutationId'] as String;
-    final path = m['path'] as String;
-    final actorId = m['actorId'] as String;
-    final appliedAt = DateTime.tryParse('${m['appliedAt']}') ?? clock();
-    final body = (m['body'] as Map).cast<String, dynamic>();
-    final users = await store.session.staff.users();
-    final author = users.where((u) => u.id == actorId).firstOrNull;
-    try {
-      if (author == null) {
-        throw const AppServiceException(
-          'Auteur inconnu sur ce téléphone.',
-          403,
+  /// Moves the confirmed version forward with [numbered] and rebuilds the
+  /// data on this phone, all in one transaction (see sync_rebase.dart).
+  Future<void> _rebuild(List<SyncAction> numbered, int until) async {
+    final authors = {
+      for (final u in await store.session.staff.users())
+        u.id: <String, dynamic>{
+          'id': u.id,
+          'full_name': u.fullName,
+          'role': u.role,
+        },
+    };
+    await store.rebuild((tx, current) async {
+      final base =
+          await HousekeepingStore.loadSyncBase(tx) ?? SyncBase(current, until);
+      final rows = await tx.query(
+        'housekeeping_sync_outbox',
+        where: "status IN ('pending','sent')",
+        orderBy: 'created_at, rowid',
+      );
+      final own = {
+        for (final r in await tx.query(
+          'housekeeping_sync_outbox',
+          columns: ['mutation_id'],
+        ))
+          r['mutation_id'] as String,
+      };
+      final result = await rebase(
+        base: base.state,
+        seq: base.seq,
+        numbered: numbered,
+        waiting: [
+          for (final r in rows)
+            SyncAction(
+              mutationId: r['mutation_id'] as String,
+              path: r['path'] as String,
+              actorId: r['actor_id'] as String,
+              body: (jsonDecode(r['body'] as String) as Map)
+                  .cast<String, dynamic>(),
+              appliedAt: DateTime.parse(r['applied_at'] as String),
+            ),
+        ],
+        authors: authors,
+        users: current['users'],
+        until: until,
+      );
+      await HousekeepingStore.saveSyncBase(tx, result.base, result.seq);
+      await HousekeepingStore.writeState(tx, result.current);
+      for (final id in result.confirmed) {
+        await tx.delete(
+          'housekeeping_sync_outbox',
+          where: "mutation_id = ? AND status <> 'rejected'",
+          whereArgs: [id],
         );
       }
-      final as = _AsAuthor(store, {
-        'id': author.id,
-        'full_name': author.fullName,
-        'role': author.role,
-      }, seq);
-      if (path.startsWith(catalogPathPrefix)) {
-        final action = RoomCatalogAction.values
-            .asNameMap()[path.substring(catalogPathPrefix.length)];
-        if (action == null) {
-          throw const AppServiceException('Action inconnue.', 400);
+      for (final r in result.refused) {
+        final mine = own.contains(r.action.mutationId);
+        await tx.insert('housekeeping_sync_conflicts', {
+          'mutation_id': r.action.mutationId,
+          'seq': r.action.seq ?? 0,
+          'path': r.action.path,
+          'actor_id': r.action.actorId,
+          'actor_name': authors[r.action.actorId]?['full_name'],
+          'applied_at': r.action.appliedAt.toIso8601String(),
+          'message': r.message,
+          'status': r.status,
+          'received_at': clock().toIso8601String(),
+          'own': mine ? 1 : 0,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        // Never applied in the end: its id may be used again.
+        if (mine) {
+          await tx.delete(
+            'housekeeping_mutations',
+            where: 'id = ?',
+            whereArgs: [r.action.mutationId],
+          );
         }
-        await SqliteRoomCatalog(
-          as,
-          clock: () => appliedAt,
-          queueForSync: false,
-        ).mutate(action, body);
-      } else {
-        await SqliteHousekeeping(
-          as,
-          clock: () => appliedAt,
-          queueForSync: false,
-        ).mutate(path, body);
       }
-    } on AppServiceException catch (e) {
-      // No status: the phone could not save (storage). Retry later.
-      if (e.status == null) rethrow;
-      await store.syncLedger((tx) async {
-        await tx.insert('housekeeping_sync_conflicts', {
-          'mutation_id': id,
-          'seq': seq,
-          'path': path,
-          'actor_id': actorId,
-          'actor_name': author?.fullName,
-          'applied_at': appliedAt.toIso8601String(),
-          'message': e.message,
-          'status': e.status,
-          'received_at': clock().toIso8601String(),
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
-        await _set(tx, 'last_seq', '$seq');
-      });
-    } on TypeError {
-      // A malformed action must not block the queue.
-      await store.syncLedger((tx) async {
-        await tx.insert('housekeeping_sync_conflicts', {
-          'mutation_id': id,
-          'seq': seq,
-          'path': path,
-          'actor_id': actorId,
-          'actor_name': author?.fullName,
-          'applied_at': appliedAt.toIso8601String(),
-          'message': 'Action illisible.',
-          'status': 400,
-          'received_at': clock().toIso8601String(),
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
-        await _set(tx, 'last_seq', '$seq');
-      });
-    }
+      await _set(tx, 'last_seq', '${result.seq}');
+    });
   }
 
-  Future<void> _push(Uri server, String device) async {
+  /// Sends the queue. Returns true when the server refused an action.
+  Future<bool> _push(Uri server, String device) async {
+    var refused = false;
     while (true) {
       final rows = await store.syncLedger(
         (tx) => tx.query(
@@ -620,7 +638,7 @@ class HousekeepingSync extends ChangeNotifier {
           limit: pageSize,
         ),
       );
-      if (rows.isEmpty) return;
+      if (rows.isEmpty) return refused;
       final answer = await _postJson(server.replace(path: '/v1/sync/push'), {
         'deviceId': device,
         'mutations': [
@@ -644,12 +662,15 @@ class HousekeepingSync extends ChangeNotifier {
           final result = results[id];
           final status = result?['status'];
           if (status == 'applied' || status == 'duplicate') {
-            await tx.delete(
+            // Stays queued until the server's list confirms it.
+            await tx.update(
               'housekeeping_sync_outbox',
+              {'status': 'sent'},
               where: 'mutation_id = ?',
               whereArgs: [id],
             );
           } else if (status == 'rejected') {
+            refused = true;
             await tx.update(
               'housekeeping_sync_outbox',
               {
@@ -675,7 +696,7 @@ class HousekeepingSync extends ChangeNotifier {
       if (rows.any((r) => results[r['mutation_id']] == null)) {
         throw const _Unreachable('Réponse incomplète du serveur.');
       }
-      if (rows.length < pageSize) return;
+      if (rows.length < pageSize) return refused;
     }
   }
 
@@ -722,29 +743,4 @@ class HousekeepingSync extends ChangeNotifier {
       throw const _Unreachable('Réponse illisible du serveur.');
     }
   }
-}
-
-/// The store, seen as another phone's user: the replayed action runs with
-/// their role and ownership, and moves the sync cursor in its transaction.
-class _AsAuthor implements LocalSessionStore {
-  final HousekeepingStore inner;
-  final Map<String, dynamic> author;
-  final int seq;
-  _AsAuthor(this.inner, this.author, this.seq);
-
-  @override
-  Map<String, dynamic> actor(Map<String, dynamic> state) => author;
-
-  @override
-  Future<void> change(void Function(Map<String, dynamic>) action) =>
-      inner.change((s) {
-        action(s);
-        advanceSyncCursor(s, seq);
-      });
-
-  @override
-  Never fail(String message, [int status = 400]) => inner.fail(message, status);
-
-  @override
-  Future<Map<String, dynamic>> readState() => inner.readState();
 }

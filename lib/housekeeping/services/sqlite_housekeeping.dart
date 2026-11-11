@@ -1410,11 +1410,18 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     return _attachment(item['photo_id'] as String);
   }
 
+  // A rule run on this phone: also kept in the sync's confirmed version.
+  Future<void> _local(void Function(Map<String, dynamic>) action) =>
+      switch (store) {
+        final HousekeepingStore own => own.localChange(action),
+        _ => store.change(action),
+      };
+
   /// Archives the found items nobody claimed within the delay. A rule of the
   /// module, run when a housekeeping user opens it: no client mutation id.
   Future<int> archiveUnclaimed() async {
     var archived = 0;
-    await store.change((s) {
+    await _local((s) {
       _principal(s);
       archived = archiveExpiredLostItems(s, clock()).length;
     });
@@ -1432,7 +1439,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     final preview = checkLateCleanings(s, now);
     if (!preview.changed) return preview.next;
     DateTime? next;
-    await store.change((s) {
+    await _local((s) {
       _principal(s);
       next = checkLateCleanings(s, clock()).next;
     });

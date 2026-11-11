@@ -25,11 +25,16 @@ Pare-feu Windows : autoriser Dart sur les réseaux privés au premier lancement.
 |---|---|---|
 | GET | `/v1/health` | serveur en marche, nombre d'actions |
 | POST | `/v1/sync/push` | `{deviceId, mutations:[{mutationId, path, body, actorId, appliedAt}]}` → `applied`, `duplicate` ou `rejected` pour chacune |
-| GET | `/v1/sync/pull?since=<seq>&device=<id>&limit=50` | actions des autres téléphones après `since` ; `until` = dernier numéro parcouru, `more` = page suivante |
+| GET | `/v1/sync/pull?since=<seq>&limit=50` | toutes les actions après `since`, dans l'ordre du serveur, celles du téléphone qui demande comprises ; `until` = dernier numéro rendu, `more` = page suivante |
 | GET | `/v1/rooms/activity` | dernière action de chaque chambre (à ouvrir dans un navigateur) |
 
 Un `mutationId` déjà reçu n'est jamais enregistré deux fois : un téléphone
 peut toujours renvoyer après une coupure.
+
+L'ordre du serveur fait foi : chaque téléphone reconstruit ses données en
+appliquant cette liste dans l'ordre (ses propres actions comprises), puis
+ses actions pas encore numérotées par-dessus. Une action refusée par les
+règles l'est donc sur tous les téléphones.
 
 ## Tests
 
