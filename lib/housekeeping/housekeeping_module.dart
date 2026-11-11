@@ -7,6 +7,7 @@ import '../shared/models/nova_module.dart';
 import '../shared/services/app_database.dart';
 import '../shared/services/app_session.dart';
 import 'screens/housekeeping_home_screen.dart';
+import 'services/demo_hotel.dart';
 import 'services/hotel_event_handlers.dart';
 import 'services/housekeeping_store.dart';
 import 'services/housekeeping_sync.dart';
@@ -52,6 +53,17 @@ class HousekeepingModule extends NovaModule {
   void attach(AppSession session) {
     final store = housekeepingStoreFor(session);
     listenToHotelEvents(session.events, store);
+    // Presentation build only (HOUSEKEEPING_DEMO_DATA): an empty hotel is
+    // filled with the demo data, in the background.
+    if (housekeepingDemoData) {
+      unawaited(
+        fillDemoHotelIfEmpty(session).then<void>(
+          (_) {},
+          onError: (Object e) =>
+              debugPrint('housekeeping: données de démonstration ($e)'),
+        ),
+      );
+    }
     unawaited(
       housekeepingSyncFor(store).start().then<void>(
         (_) {},

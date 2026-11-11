@@ -199,6 +199,18 @@ fonctionne comme avant (saisie à la main, description d’origine).
   en morceaux.
   `GET https://api.mymemory.translated.net/get?q=…&langpair=autodetect|fr`
 
+## Hôtel de démonstration (présentation)
+
+`flutter build apk --release --dart-define=HOUSEKEEPING_SAMPLE_DATA=false --dart-define=HOUSEKEEPING_DEMO_DATA=true`
+: au démarrage, si l’hôtel n’a aucune chambre, le module le remplit une fois
+(`services/demo_hotel.dart`, environ 40 s sur le téléphone), par les mêmes
+règles que les écrans : 26 chambres sur 4 étages, cinq jours de nettoyages
+avec photos et inspections, et la journée en cours dans tous les états
+(à valider, en cours, en pause, à faire, non attribuée, hors service),
+signalements (dont un en anglais et un en arabe pour la traduction), objets
+trouvés, demandes de produits, blanchisserie, minibar. Équipe de démo :
+Manager Démo, Amina (gouvernante), Sarah, Lina, Youssef (« Comptes de test »).
+
 ## Structure
 
 ```text
