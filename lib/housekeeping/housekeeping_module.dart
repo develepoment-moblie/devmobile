@@ -57,7 +57,7 @@ class HousekeepingModule extends NovaModule {
     // filled with the demo data, in the background.
     if (housekeepingDemoData) {
       unawaited(
-        fillDemoHotelIfEmpty(session).then<void>(
+        fillDemoHotelIfEmpty(store).then<void>(
           (_) {},
           onError: (Object e) =>
               debugPrint('housekeeping: données de démonstration ($e)'),

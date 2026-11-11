@@ -4,7 +4,7 @@ import '../../shared/custom/app_theme.dart';
 import '../models/hotel_data.dart';
 import '../models/supply.dart';
 import '../screens/barcode_scan_screen.dart';
-import '../screens/minibar_catalog_screen.dart' show ProductFound;
+import 'product_scan.dart';
 import '../services/product_lookup.dart';
 import 'draft_guard.dart';
 
@@ -47,9 +47,6 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
   );
   bool _busy = false;
   String? _error;
-  late final _lookup = widget.lookup ?? ProductLookup();
-  ProductInfo? _found;
-  String? _note;
   bool get _editing => widget.supply != null;
   bool get _dirty =>
       _name.text != (widget.supply?.name ?? '') ||
@@ -65,44 +62,18 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
     _quantity.dispose();
     _minimum.dispose();
     _price.dispose();
-    if (widget.lookup == null) _lookup.close();
     super.dispose();
   }
 
-  // Scan the barcode; a sheet found sets the name and the type.
-  Future<void> _scan() async {
-    final code = await widget.scan(context);
-    if (code == null || !mounted) return;
-    setState(() {
-      _busy = true;
-      _error = null;
-      _note = null;
-    });
-    try {
-      final product = await _lookup.find(
-        code,
-        sources: const [ProductSource.beauty, ProductSource.food],
-      );
-      if (!mounted) return;
-      setState(() {
-        _found = product;
-        if (product == null) {
-          _note = 'Produit $code introuvable : saisissez-le à la main.';
-          return;
-        }
-        _name.text = product.label;
-        final amenity = product.source == ProductSource.beauty;
-        _category = amenity ? 'accueil' : 'minibar';
-        if (_unit.text.trim().isEmpty) {
-          _unit.text = amenity ? 'flacons' : 'unités';
-        }
-      });
-    } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
-    } finally {
-      if (mounted) setState(() => _busy = false);
+  // A product found by its barcode sets the name, the type and the unit.
+  void _found(ProductInfo product) => setState(() {
+    _name.text = product.label;
+    final amenity = product.source == ProductSource.beauty;
+    _category = amenity ? 'accueil' : 'minibar';
+    if (_unit.text.trim().isEmpty) {
+      _unit.text = amenity ? 'flacons' : 'unités';
     }
-  }
+  });
 
   String? _count(String? v) {
     final n = int.tryParse(v?.trim() ?? '');
@@ -179,27 +150,15 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
                   ),
                 ),
               ),
-            if (!_editing) ...[
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _scan,
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Scanner le code-barres'),
+            if (!_editing)
+              ProductScan(
+                sources: const [ProductSource.beauty, ProductSource.food],
+                enabled: !_busy,
+                scan: widget.scan,
+                lookup: widget.lookup,
+                onBusy: (busy) => setState(() => _busy = busy),
+                onFound: _found,
               ),
-              if (_busy) const LinearProgressIndicator(),
-              if (_note != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    _note!,
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              if (_found != null) ProductFound(_found!),
-              const SizedBox(height: 8),
-            ],
             TextFormField(
               controller: _name,
               enabled: !_busy,

@@ -366,7 +366,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         find.text(
-          'Code 3017620422003 inconnu d’Open Food Facts : saisissez l’article à la main.',
+          'Produit 3017620422003 introuvable : saisissez-le à la main.',
         ),
         findsOneWidget,
       );

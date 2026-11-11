@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
 import 'app_exception.dart';
+import 'http_guard.dart';
 
 // Finds a packaged product by its barcode, to fill in a stock item: scan it,
 // the name comes by itself. Two free databases, no key, same API:
@@ -75,41 +74,30 @@ class ProductLookup {
   }
 
   Future<ProductInfo?> _find(String barcode, ProductSource source) async {
-    final http.Response response;
-    try {
-      response = await _client
-          .get(
-            Uri.https(source.host, '/api/v2/product/$barcode.json', {
-              'fields': 'product_name,product_name_fr,brands,quantity,image_front_small_url',
-            }),
-            // These databases ask apps to name themselves.
-            headers: {'user-agent': 'NovaParis/1.0 (projet etudiant)'},
-          )
-          .timeout(timeout);
-    } on TimeoutException {
-      throw AppServiceException(
-        '${source.label} ne répond pas. Saisissez l’article à la main.',
-      );
-    } on SocketException {
-      throw const AppServiceException(
-        'Pas de connexion Internet. Saisissez l’article à la main.',
-      );
-    } on http.ClientException {
-      throw const AppServiceException(
-        'Pas de connexion Internet. Saisissez l’article à la main.',
-      );
-    }
+    final response = await guardedRequest(
+      () => _client.get(
+        Uri.https(source.host, '/api/v2/product/$barcode.json', {
+          'fields': 'product_name,product_name_fr,brands,quantity,image_front_small_url',
+        }),
+        // These databases ask apps to name themselves.
+        headers: {'user-agent': 'NovaParis/1.0 (projet etudiant)'},
+      ),
+      timeout: timeout,
+      fail: (failure) => throw AppServiceException(switch (failure) {
+        NetworkFailure.timeout =>
+          '${source.label} ne répond pas. Saisissez l’article à la main.',
+        NetworkFailure.offline =>
+          'Pas de connexion Internet. Saisissez l’article à la main.',
+      }),
+    );
     if (response.statusCode == 404) return null;
     if (response.statusCode != 200) {
       throw AppServiceException(
         '${source.label} indisponible (${response.statusCode}).',
       );
     }
-    final Map<String, dynamic> json;
-    try {
-      json = (jsonDecode(utf8.decode(response.bodyBytes)) as Map)
-          .cast<String, dynamic>();
-    } on FormatException {
+    final json = jsonObject(response);
+    if (json == null) {
       throw AppServiceException('Réponse illisible de ${source.label}.');
     }
     final product = json['product'];

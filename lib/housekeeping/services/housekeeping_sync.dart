@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
 import 'app_exception.dart';
+import 'http_guard.dart';
 import 'housekeeping_store.dart';
 import 'mutation_meta.dart';
 import 'sync_outbox.dart';
@@ -719,28 +719,19 @@ class HousekeepingSync extends ChangeNotifier {
   Future<Map<String, dynamic>> _send(
     Future<http.Response> Function() request,
   ) async {
-    final http.Response response;
-    try {
-      response = await request().timeout(timeout);
-    } on TimeoutException {
-      throw const _Unreachable('Le serveur ne répond pas (délai dépassé).');
-    } on SocketException {
-      throw const _Unreachable(
-        'Serveur injoignable. Vérifiez le Wi-Fi et l’adresse.',
-      );
-    } on http.ClientException {
-      throw const _Unreachable(
-        'Serveur injoignable. Vérifiez le Wi-Fi et l’adresse.',
-      );
-    }
+    final response = await guardedRequest(
+      request,
+      timeout: timeout,
+      fail: (failure) => throw _Unreachable(switch (failure) {
+        NetworkFailure.timeout => 'Le serveur ne répond pas (délai dépassé).',
+        NetworkFailure.offline =>
+          'Serveur injoignable. Vérifiez le Wi-Fi et l’adresse.',
+      }),
+    );
     if (response.statusCode != 200) {
       throw _Unreachable('Erreur du serveur (${response.statusCode}).');
     }
-    try {
-      return (jsonDecode(utf8.decode(response.bodyBytes)) as Map)
-          .cast<String, dynamic>();
-    } on FormatException {
-      throw const _Unreachable('Réponse illisible du serveur.');
-    }
+    return jsonObject(response) ??
+        (throw const _Unreachable('Réponse illisible du serveur.'));
   }
 }

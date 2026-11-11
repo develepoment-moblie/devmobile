@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
 import 'app_exception.dart';
+import 'http_guard.dart';
 
 // Translates a problem report into French with MyMemory (free, no key, a
 // daily quota): an agent writes in Arabic or English, the supervisor reads
@@ -87,34 +87,23 @@ class ReportTranslator {
   }
 
   Future<(String, String?)> _one(String text) async {
-    final http.Response response;
-    try {
-      response = await _client
-          .get(
-            Uri.https('api.mymemory.translated.net', '/get', {
-              'q': text,
-              'langpair': 'autodetect|fr',
-            }),
-          )
-          .timeout(timeout);
-    } on TimeoutException {
-      throw const AppServiceException(
-        'Le service de traduction ne répond pas. Réessayez.',
-      );
-    } on SocketException {
-      throw const AppServiceException(
-        'Pas de connexion Internet : traduction impossible.',
-      );
-    } on http.ClientException {
-      throw const AppServiceException(
-        'Pas de connexion Internet : traduction impossible.',
-      );
-    }
-    final Map<String, dynamic> json;
-    try {
-      json = (jsonDecode(utf8.decode(response.bodyBytes)) as Map)
-          .cast<String, dynamic>();
-    } on FormatException {
+    final response = await guardedRequest(
+      () => _client.get(
+        Uri.https('api.mymemory.translated.net', '/get', {
+          'q': text,
+          'langpair': 'autodetect|fr',
+        }),
+      ),
+      timeout: timeout,
+      fail: (failure) => throw AppServiceException(switch (failure) {
+        NetworkFailure.timeout =>
+          'Le service de traduction ne répond pas. Réessayez.',
+        NetworkFailure.offline =>
+          'Pas de connexion Internet : traduction impossible.',
+      }),
+    );
+    final json = jsonObject(response);
+    if (json == null) {
       throw const AppServiceException('Traduction indisponible.');
     }
     final status = json['responseStatus'];

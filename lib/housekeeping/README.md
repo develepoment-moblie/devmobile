@@ -204,7 +204,13 @@ fonctionne comme avant (saisie à la main, description d’origine).
 `flutter build apk --release --dart-define=HOUSEKEEPING_SAMPLE_DATA=false --dart-define=HOUSEKEEPING_DEMO_DATA=true`
 : au démarrage, si l’hôtel n’a aucune chambre, le module le remplit une fois
 (`services/demo_hotel.dart`, environ 40 s sur le téléphone), par les mêmes
-règles que les écrans : 26 chambres sur 4 étages, cinq jours de nettoyages
+règles que les écrans, au nom de chaque personne de l’équipe de démo (la
+personne connectée sur le téléphone n’est pas touchée ; les écrans se mettent
+à jour au fur et à mesure). Un remplissage interrompu est refait au
+lancement suivant (repère dans `housekeeping_sync_state`) ; rien n’est mis en
+file pour le serveur, et un téléphone réglé sur un serveur n’est pas rempli.
+La journée en cours se place dans les heures qui précèdent le remplissage.
+Contenu : 26 chambres sur 4 étages, cinq jours de nettoyages
 avec photos et inspections, et la journée en cours dans tous les états
 (à valider, en cours, en pause, à faire, non attribuée, hors service),
 signalements (dont un en anglais et un en arabe pour la traduction), objets
@@ -234,6 +240,8 @@ services/
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
   housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
+  http_guard.dart               appels web : délai, absence de réseau, réponse JSON
+  demo_hotel.dart               hôtel de démonstration (option de compilation)
   product_lookup.dart           fiche produit depuis un code-barres (Open Beauty / Food Facts)
   report_translation.dart       traduction des signalements en français (MyMemory)
   sync_rebase.dart              reconstruction dans l’ordre du serveur (version confirmée)

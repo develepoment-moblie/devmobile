@@ -239,9 +239,14 @@ void main() {
       return data.issues.firstWhere((i) => i.description == text).id;
     }
 
-    final english = await report('The bathroom light is broken');
-    final arabic = await report('الحوض يسرب الماء');
-    final french = await report('La télévision ne s’allume plus');
+    // Setup as a step: a problem here shows in the report, not as a crash.
+    late final String english, arabic, french;
+    await step('signalements', 'Trois signalements écrits par Sarah', () async {
+      english = await report('The bathroom light is broken');
+      arabic = await report('الحوض يسرب الماء');
+      french = await report('La télévision ne s’allume plus');
+      return 'En anglais, en arabe et en français';
+    });
     signIn('amina');
     await data.refresh();
     Future<void> translate(String issueId, Finder expected) async {
