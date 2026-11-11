@@ -172,6 +172,26 @@ Le serveur ne vérifie pas qui envoie (réseau de l’hôtel supposé fermé). L
 téléphones doivent partir des mêmes données (nouvelle installation ou même
 sauvegarde restaurée).
 
+## API publiques
+
+Deux services web gratuits, sans clé, en HTTPS. Sans Internet, l’application
+fonctionne comme avant (saisie à la main, description d’origine).
+
+- **Open Food Facts** (`services/product_lookup.dart`) : dans « Carte du
+  minibar » → « Nouvel article », « Scanner le code-barres » ouvre la caméra
+  (`screens/barcode_scan_screen.dart`, EAN-13, EAN-8, UPC) ; l’API remplit
+  le nom et la contenance (« Coca-Cola 330 ml ») et montre la photo du
+  produit. Le Manager ajoute le prix et le stock puis enregistre comme
+  d’habitude. Seul le code-barres quitte le téléphone.
+  `GET https://world.openfoodfacts.org/api/v2/product/<code>.json`
+- **MyMemory** (`services/report_translation.dart`) : sur un signalement,
+  « Traduire en français » affiche la traduction sous la description
+  d’origine, avec la langue détectée (« anglais → français »). Rien n’est
+  enregistré ; seul le texte du signalement est envoyé. Quota gratuit
+  d’environ 5 000 mots par jour ; un texte de plus de 500 octets est envoyé
+  en morceaux.
+  `GET https://api.mymemory.translated.net/get?q=…&langpair=autodetect|fr`
+
 ## Structure
 
 ```text
@@ -195,6 +215,8 @@ services/
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
   housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
+  product_lookup.dart           fiche produit depuis un code-barres (Open Food Facts)
+  report_translation.dart       traduction des signalements en français (MyMemory)
   sync_rebase.dart              reconstruction dans l’ordre du serveur (version confirmée)
   sync_outbox.dart              file d’envoi remplie dans la transaction de l’action
   voice_notes.dart              enregistrement et lecture des notes vocales

@@ -7,6 +7,7 @@ import '../custom/roomcard.dart';
 import '../custom/voice_note_recorder.dart';
 import '../models/hotel_data.dart';
 import '../models/issue.dart';
+import '../services/report_translation.dart';
 import '../services/voice_notes.dart';
 
 String issueDate(DateTime d) =>
@@ -252,10 +253,14 @@ class IssueCard extends StatelessWidget {
 class IssueDetailScreen extends StatefulWidget {
   final HotelData data;
   final String issueId;
+
+  /// "Traduire en français" (MyMemory); replaceable in tests.
+  final ReportTranslator? translator;
   const IssueDetailScreen({
     super.key,
     required this.data,
     required this.issueId,
+    this.translator,
   });
   @override
   State<IssueDetailScreen> createState() => _IssueDetailScreenState();
@@ -265,6 +270,26 @@ class _IssueDetailScreenState extends State<IssueDetailScreen> {
   late final VoiceNotes _voice = widget.data.createVoiceNotes();
   bool _busy = false;
   String? _error;
+  late final _translator = widget.translator ?? ReportTranslator();
+  Translation? _translation;
+  String? _translationError;
+  bool _translating = false;
+
+  Future<void> _translate(String text) async {
+    if (_translating) return;
+    setState(() {
+      _translating = true;
+      _translationError = null;
+    });
+    try {
+      final result = await _translator.toFrench(text);
+      if (mounted) setState(() => _translation = result);
+    } catch (e) {
+      if (mounted) setState(() => _translationError = e.toString());
+    } finally {
+      if (mounted) setState(() => _translating = false);
+    }
+  }
 
   @override
   void initState() {
@@ -276,6 +301,7 @@ class _IssueDetailScreenState extends State<IssueDetailScreen> {
   void dispose() {
     widget.data.removeListener(_changed);
     _voice.dispose();
+    if (widget.translator == null) _translator.close();
     super.dispose();
   }
 
@@ -435,6 +461,12 @@ class _IssueDetailScreenState extends State<IssueDetailScreen> {
           ),
           const SizedBox(height: 16),
           Text(issue.description, style: const TextStyle(fontSize: 15)),
+          _TranslationBlock(
+            translation: _translation,
+            error: _translationError,
+            busy: _translating,
+            onTranslate: () => _translate(issue.description),
+          ),
           if (issue.photoIds.isNotEmpty) ...[
             const SizedBox(height: 16),
             Wrap(
@@ -520,6 +552,83 @@ class _IssueDetailScreenState extends State<IssueDetailScreen> {
           ],
         ],
       ),
+    );
+  }
+}
+
+// "Traduire en français" under a report's description: the original stays,
+// the translation shows below it with its source language.
+class _TranslationBlock extends StatelessWidget {
+  final Translation? translation;
+  final String? error;
+  final bool busy;
+  final VoidCallback onTranslate;
+  const _TranslationBlock({
+    required this.translation,
+    required this.error,
+    required this.busy,
+    required this.onTranslate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = translation;
+    if (t != null && t.alreadyFrench) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 6),
+        child: Text(
+          'Déjà en français.',
+          style: TextStyle(color: AppColors.muted, fontSize: 12),
+        ),
+      );
+    }
+    if (t != null) {
+      return Container(
+        margin: const EdgeInsets.only(top: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.grayLight,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Traduction automatique (${t.fromLabel} → français)',
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+            const SizedBox(height: 4),
+            Text(t.text, style: const TextStyle(fontSize: 15)),
+          ],
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: busy ? null : onTranslate,
+            icon: busy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.translate),
+            label: const Text('Traduire en français'),
+          ),
+        ),
+        if (error != null)
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              error!,
+              style: const TextStyle(color: AppColors.red, fontSize: 12),
+            ),
+          ),
+      ],
     );
   }
 }
