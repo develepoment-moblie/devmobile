@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 
 import '../../shared/services/app_events.dart';
 import '../models/task_schema.dart';
@@ -16,6 +15,7 @@ import 'local_session_store.dart';
 import 'mutation_meta.dart';
 import 'notification_rules.dart';
 import 'room_rules.dart';
+import 'sync_outbox.dart';
 
 // The housekeeping rules. Every action re-reads the state and checks role,
 // ownership and version inside one transaction (LocalSessionStore.change).
@@ -33,7 +33,9 @@ import 'room_rules.dart';
 // ratings (see _inspect); report creates a problem report (housekeeping_issues).
 // Every body carries mutationId (UUID v4) and clientTimestamp; a repeated
 // mutationId is ignored. Times are taken from [clock] inside the
-// transaction, never from the client.
+// transaction, never from the client. New ids are derived from the
+// mutationId (see inMutation), and every new action is queued for the
+// hotel server in the same transaction (see sync_outbox.dart).
 class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
   final LocalSessionStore store;
 
@@ -42,8 +44,15 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
 
   /// The authoritative clock (replaceable in tests).
   final DateTime Function() clock;
-  SqliteHousekeeping(this.store, {this.events, DateTime Function()? clock})
-    : clock = clock ?? DateTime.now;
+
+  /// False when replaying another phone's action: it is not sent back.
+  final bool queueForSync;
+  SqliteHousekeeping(
+    this.store, {
+    this.events,
+    DateTime Function()? clock,
+    this.queueForSync = true,
+  }) : clock = clock ?? DateTime.now;
 
   Map<String, dynamic> _principal(Map<String, dynamic> state) {
     final actor = store.actor(state);
@@ -170,6 +179,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       'mutations',
       'settings',
       'stays',
+      ...syncStateKeys,
     ]) {
       s.remove(key);
     }
@@ -179,7 +189,19 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
   @override
   Future<void> mutate(String path, Map<String, dynamic> body) async {
     final announce = <AppEvent>[];
-    await store.change((s) => _apply(s, path, body, announce));
+    await store.change((s) {
+      final now = clock();
+      final applied = (s['mutations'] as List?)?.length ?? 0;
+      inMutation(
+        '${body['mutationId']}',
+        now,
+        () => _apply(s, path, body, announce, now),
+      );
+      // Only a new action is queued: an idempotent replay adds nothing.
+      if (queueForSync && ((s['mutations'] as List?)?.length ?? 0) > applied) {
+        queueForServer(s, path, body, store.actor(s)['id'] as String, now);
+      }
+    });
     // Only once the change is saved.
     for (final event in announce) {
       if (event is MaintenanceRequested) {
@@ -196,10 +218,10 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     String path,
     Map<String, dynamic> body,
     List<AppEvent> announce,
+    DateTime now,
   ) {
     final actor = _principal(s);
     final supervisor = actor['role'] == 'supervisor';
-    final now = clock();
     if (!acceptMutation(
       s,
       path,
@@ -229,8 +251,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
       return value as int;
     }
 
-    String newId(String prefix) =>
-        '$prefix-${now.microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}';
+    String newId(String prefix) => '$prefix-${uuidV4()}';
 
     String storePhoto(Object? encoded) {
       final bytes = EvidencePhoto.validate(encoded as String);
@@ -1389,11 +1410,18 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     return _attachment(item['photo_id'] as String);
   }
 
+  // A rule run on this phone: also kept in the sync's confirmed version.
+  Future<void> _local(void Function(Map<String, dynamic>) action) =>
+      switch (store) {
+        final HousekeepingStore own => own.localChange(action),
+        _ => store.change(action),
+      };
+
   /// Archives the found items nobody claimed within the delay. A rule of the
   /// module, run when a housekeeping user opens it: no client mutation id.
   Future<int> archiveUnclaimed() async {
     var archived = 0;
-    await store.change((s) {
+    await _local((s) {
       _principal(s);
       archived = archiveExpiredLostItems(s, clock()).length;
     });
@@ -1411,7 +1439,7 @@ class SqliteHousekeeping implements HousekeepingBackend, TaskPhotoBackend {
     final preview = checkLateCleanings(s, now);
     if (!preview.changed) return preview.next;
     DateTime? next;
-    await store.change((s) {
+    await _local((s) {
       _principal(s);
       next = checkLateCleanings(s, clock()).next;
     });

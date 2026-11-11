@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:sqflite/sqflite.dart';
 
 import '../../shared/models/app_user.dart';
 import 'app_exception.dart';
@@ -35,6 +36,13 @@ class HousekeepingBackup {
     'housekeeping_laundry_lines',
     'housekeeping_supply_request_lines',
   };
+
+  /// The housekeeping tables a backup holds. The sync tables (server
+  /// address, this phone's id, outbox) belong to the phone: a backup leaves
+  /// them out and a restore keeps them.
+  static const _moduleTables =
+      "type = 'table' AND name LIKE 'housekeeping\\_%' ESCAPE '\\' "
+      "AND name NOT LIKE 'housekeeping\\_sync\\_%' ESCAPE '\\'";
 
   final HousekeepingStore store;
   final Future<Directory> Function() _appFolder;
@@ -88,7 +96,7 @@ class HousekeepingBackup {
       for (final t in await db.query(
         'sqlite_master',
         columns: ['name', 'sql'],
-        where: "type = 'table' AND name LIKE 'housekeeping\\_%' ESCAPE '\\'",
+        where: _moduleTables,
         orderBy: 'name',
       )) {
         tables[t['name'] as String] = {
@@ -262,8 +270,7 @@ class HousekeepingBackup {
             for (final t in await tx.query(
               'sqlite_master',
               columns: ['name'],
-              where:
-                  "type = 'table' AND name LIKE 'housekeeping\\_%' ESCAPE '\\'",
+              where: _moduleTables,
             ))
               t['name'] as String,
           ]..sort(
@@ -298,7 +305,20 @@ class HousekeepingBackup {
           housekeepingSchema.version,
         );
       }
+      // Sync: actions made after the backup are gone with the data, so they
+      // are not sent. The confirmed version starts again from the restored
+      // data and the server's list is read from the start (the actions
+      // already in the backup change nothing).
+      await tx.delete('housekeeping_sync_outbox');
+      await tx.delete('housekeeping_sync_conflicts');
+      await tx.delete('housekeeping_sync_base');
+      await tx.insert('housekeeping_sync_state', {
+        'key': 'last_seq',
+        'value': '0',
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     });
+    // The restored data is the new starting point of the sync.
+    await store.ensureSyncBase(0, onlyWhenSyncing: true);
     final base = (await _appFolder()).path;
     for (final e in (backup['files'] as Map? ?? {}).entries) {
       final relative = e.key as String;

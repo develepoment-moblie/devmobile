@@ -16,8 +16,10 @@ import 'floor_screen.dart';
 import 'minibar_catalog_screen.dart';
 import 'staff_screen.dart' show openDashboard;
 import 'backup_screen.dart';
+import 'sync_screen.dart';
 import '../services/housekeeping_backup.dart';
 import '../services/housekeeping_store.dart';
+import '../services/housekeeping_sync.dart';
 import '../services/sqlite_room_catalog.dart';
 
 // The Manager's catalog: the hotel's floors, each opening its rooms.
@@ -232,6 +234,13 @@ class _ManageRoomsScreenState extends State<ManageRoomsScreen> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      open(SyncScreen(sync: housekeepingSyncFor(store))),
+                  icon: const Icon(Icons.sync),
+                  label: const Text('Synchronisation'),
                 ),
               ],
               const SizedBox(height: 10),

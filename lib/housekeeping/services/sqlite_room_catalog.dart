@@ -4,15 +4,24 @@ import 'local_session_store.dart';
 import 'mutation_meta.dart';
 import 'room_catalog_backend.dart';
 import 'room_rules.dart';
+import 'sync_outbox.dart';
 
 // The Manager's catalog: rooms, floors and the task list of each category.
 // Every body carries mutationId (UUID v4) and clientTimestamp; a repeated
-// mutationId is ignored.
+// mutationId is ignored. Like SqliteHousekeeping, new ids come from the
+// mutationId and a new action is queued for the hotel server, as
+// catalog/<action>.
 class SqliteRoomCatalog implements RoomCatalogBackend {
   final LocalSessionStore store;
   final DateTime Function() clock;
-  SqliteRoomCatalog(this.store, {DateTime Function()? clock})
-    : clock = clock ?? DateTime.now;
+
+  /// False when replaying another phone's action: it is not sent back.
+  final bool queueForSync;
+  SqliteRoomCatalog(
+    this.store, {
+    DateTime Function()? clock,
+    this.queueForSync = true,
+  }) : clock = clock ?? DateTime.now;
   void _manager(Map<String, dynamic> state) {
     if (!['manager', 'admin'].contains(store.actor(state)['role'])) {
       store.fail('Action réservée au manager.', 403);
@@ -71,17 +80,36 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
   }
 
   @override
-  Future<void> mutate(
+  Future<void> mutate(RoomCatalogAction action, Map<String, dynamic> body) =>
+      store.change((s) {
+        final now = clock();
+        final path = '$catalogPathPrefix${action.name}';
+        final applied = (s['mutations'] as List?)?.length ?? 0;
+        inMutation(
+          '${body['mutationId']}',
+          now,
+          () => _apply(s, path, action, body, now),
+        );
+        if (queueForSync &&
+            ((s['mutations'] as List?)?.length ?? 0) > applied) {
+          queueForServer(s, path, body, store.actor(s)['id'] as String, now);
+        }
+      });
+
+  void _apply(
+    Map<String, dynamic> s,
+    String path,
     RoomCatalogAction action,
     Map<String, dynamic> body,
-  ) => store.change((s) {
+    DateTime now,
+  ) {
     _manager(s);
     if (!acceptMutation(
       s,
-      'catalog/${action.name}',
+      path,
       body,
       store.actor(s)['id'] as String,
-      clock(),
+      now,
       store.fail,
     )) {
       return; // Already applied.
@@ -298,5 +326,5 @@ class SqliteRoomCatalog implements RoomCatalogBackend {
           ? 'Chambre restaurée, nettoyage requis'
           : 'Catégorie modifiée'} par $actor',
     );
-  });
+  }
 }

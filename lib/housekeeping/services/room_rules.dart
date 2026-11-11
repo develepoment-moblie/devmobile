@@ -1,12 +1,11 @@
-import 'dart:math';
-
 import 'inspection_scoring.dart';
+import 'mutation_meta.dart';
 import 'notification_rules.dart';
 
 // Small state changes shared by user actions and by other modules' events.
 // They work on the persisted room shape read by HousekeepingStore.
 
-String _time() => DateTime.now().toLocal().toIso8601String().substring(0, 16);
+String _time() => mutationNow().toLocal().toIso8601String().substring(0, 16);
 
 /// The room needs a fresh cleaning: assignment, checks and photos are cleared.
 void resetCleaning(Map<String, dynamic> room) {
@@ -38,8 +37,7 @@ void addNotification(
   String? recipient,
   String? category,
 }) => (state['notifications'] as List).insert(0, {
-  'id':
-      '${roomNumber.isEmpty ? 'stock' : roomNumber}-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 30)}',
+  'id': '${roomNumber.isEmpty ? 'stock' : roomNumber}-${uuidV4()}',
   'title': title,
   'message': message,
   'roomNumber': roomNumber,
