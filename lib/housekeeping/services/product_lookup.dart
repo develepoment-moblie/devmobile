@@ -6,21 +6,34 @@ import 'package:http/http.dart' as http;
 
 import 'app_exception.dart';
 
-// Finds a packaged product by its barcode in Open Food Facts (free, no key),
-// to fill in a minibar item: scan the can, the name comes by itself.
-//   GET https://world.openfoodfacts.org/api/v2/product/<barcode>.json
+// Finds a packaged product by its barcode, to fill in a stock item: scan it,
+// the name comes by itself. Two free databases, no key, same API:
+//  - Open Food Facts: drinks and snacks (the minibar);
+//  - Open Beauty Facts: shower gel, shampoo, soap (the guest amenities).
+//   GET https://world.open{food|beauty}facts.org/api/v2/product/<code>.json
 // Only the barcode leaves the phone.
+
+/// Where a product sheet comes from.
+enum ProductSource {
+  food('Open Food Facts', 'world.openfoodfacts.org'),
+  beauty('Open Beauty Facts', 'world.openbeautyfacts.org');
+
+  final String label, host;
+  const ProductSource(this.label, this.host);
+}
 
 /// What Open Food Facts knows about a product.
 class ProductInfo {
   final String barcode, name;
   final String? brand, quantity, imageUrl;
+  final ProductSource source;
   const ProductInfo({
     required this.barcode,
     required this.name,
     this.brand,
     this.quantity,
     this.imageUrl,
+    this.source = ProductSource.food,
   });
 
   /// "Coca-Cola 330 ml": the name and the size, 80 characters at most (the
@@ -46,29 +59,36 @@ class ProductLookup {
     this.timeout = const Duration(seconds: 8),
   }) : _client = client ?? http.Client();
 
-  /// The product, or null when Open Food Facts does not know it.
-  Future<ProductInfo?> find(String barcode) async {
+  /// The product from the first of [sources] that knows it, or null.
+  Future<ProductInfo?> find(
+    String barcode, {
+    List<ProductSource> sources = const [ProductSource.food],
+  }) async {
     if (!isProductBarcode(barcode)) {
       throw const AppServiceException('Code-barres invalide.');
     }
+    for (final source in sources) {
+      final product = await _find(barcode, source);
+      if (product != null) return product;
+    }
+    return null;
+  }
+
+  Future<ProductInfo?> _find(String barcode, ProductSource source) async {
     final http.Response response;
     try {
       response = await _client
           .get(
-            Uri.https(
-              'world.openfoodfacts.org',
-              '/api/v2/product/$barcode.json',
-              {
-                'fields': 'product_name,product_name_fr,brands,quantity,image_front_small_url',
-              },
-            ),
-            // Open Food Facts asks apps to name themselves.
+            Uri.https(source.host, '/api/v2/product/$barcode.json', {
+              'fields': 'product_name,product_name_fr,brands,quantity,image_front_small_url',
+            }),
+            // These databases ask apps to name themselves.
             headers: {'user-agent': 'NovaParis/1.0 (projet etudiant)'},
           )
           .timeout(timeout);
     } on TimeoutException {
-      throw const AppServiceException(
-        'Open Food Facts ne répond pas. Saisissez l’article à la main.',
+      throw AppServiceException(
+        '${source.label} ne répond pas. Saisissez l’article à la main.',
       );
     } on SocketException {
       throw const AppServiceException(
@@ -82,7 +102,7 @@ class ProductLookup {
     if (response.statusCode == 404) return null;
     if (response.statusCode != 200) {
       throw AppServiceException(
-        'Open Food Facts indisponible (${response.statusCode}).',
+        '${source.label} indisponible (${response.statusCode}).',
       );
     }
     final Map<String, dynamic> json;
@@ -90,7 +110,7 @@ class ProductLookup {
       json = (jsonDecode(utf8.decode(response.bodyBytes)) as Map)
           .cast<String, dynamic>();
     } on FormatException {
-      throw const AppServiceException('Réponse illisible d’Open Food Facts.');
+      throw AppServiceException('Réponse illisible de ${source.label}.');
     }
     final product = json['product'];
     if (json['status'] != 1 || product is! Map) return null;
@@ -107,6 +127,7 @@ class ProductLookup {
       brand: field('brands'),
       quantity: field('quantity'),
       imageUrl: field('image_front_small_url'),
+      source: source,
     );
   }
 

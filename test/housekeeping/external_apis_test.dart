@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:nova_paris/housekeeping/custom/supply_form_dialog.dart';
 import 'package:nova_paris/housekeeping/models/catalog_data.dart';
 import 'package:nova_paris/housekeeping/screens/issues_screen.dart';
 import 'package:nova_paris/housekeeping/screens/minibar_catalog_screen.dart';
@@ -17,8 +18,9 @@ import 'package:nova_paris/shared/custom/app_theme.dart';
 import 'fake_devices.dart';
 import 'memory_store.dart';
 
-// The two public APIs of the module, without network: Open Food Facts (fill
-// in a minibar item from its barcode) and MyMemory (translate a report).
+// The public APIs of the module, without network: Open Food Facts and Open
+// Beauty Facts (fill in a stock item from its barcode) and MyMemory
+// (translate a report).
 http.Response json(Object body, [int status = 200]) => http.Response.bytes(
   utf8.encode(jsonEncode(body)),
   status,
@@ -117,6 +119,77 @@ void main() {
         ProductLookup(client: MockClient((_) async => json(cocaCola)))
             .find('abc'),
         throwsA(isA<AppServiceException>()),
+      );
+    });
+  });
+
+  group('Open Beauty Facts', () {
+    final showerGel = {
+      'code': '4305615834696',
+      'status': 1,
+      'product': {
+        'product_name': 'Duschgel Relax 3in1',
+        'brands': 'Isana',
+        'quantity': '300 ml',
+      },
+    };
+
+    test('the stock looks in Open Beauty Facts first', () async {
+      final hosts = <String>[];
+      final product =
+          await ProductLookup(
+            client: MockClient((request) async {
+              hosts.add(request.url.host);
+              return json(showerGel);
+            }),
+          ).find(
+            '4305615834696',
+            sources: const [ProductSource.beauty, ProductSource.food],
+          );
+      expect(hosts, ['world.openbeautyfacts.org']);
+      expect(product!.source, ProductSource.beauty);
+      expect(product.label, 'Duschgel Relax 3in1 300 ml');
+    });
+
+    test('unknown there, Open Food Facts is asked next', () async {
+      final hosts = <String>[];
+      final lookup = ProductLookup(
+        client: MockClient((request) async {
+          hosts.add(request.url.host);
+          return request.url.host == 'world.openfoodfacts.org'
+              ? json(cocaCola)
+              : json({'status': 0});
+        }),
+      );
+      final product = await lookup.find(
+        '5449000000996',
+        sources: const [ProductSource.beauty, ProductSource.food],
+      );
+      expect(hosts, ['world.openbeautyfacts.org', 'world.openfoodfacts.org']);
+      expect(product!.source, ProductSource.food);
+      expect(product.source.label, 'Open Food Facts');
+      hosts.clear();
+      expect(
+        await ProductLookup(
+          client: MockClient((request) async {
+            hosts.add(request.url.host);
+            return json({'status': 0});
+          }),
+        ).find(
+          '3017620422003',
+          sources: const [ProductSource.beauty, ProductSource.food],
+        ),
+        isNull,
+      );
+      expect(hosts, hasLength(2));
+    });
+
+    test('an error names the database that failed', () async {
+      expect(
+        await ProductLookup(client: MockClient((_) async => json({}, 502)))
+            .find('4305615834696', sources: const [ProductSource.beauty])
+            .then<Object?>((v) => v, onError: (e) => '$e'),
+        'Open Beauty Facts indisponible (502).',
       );
     });
   });
@@ -383,6 +456,141 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Déjà en français.'), findsOneWidget);
       data.dispose();
+    });
+
+    Future<void> openSupplyForm(
+      WidgetTester tester,
+      MemoryStore store, {
+      required String code,
+      required ProductLookup lookup,
+    }) async {
+      final data = await loadAs(store, 'amina');
+      addTearDown(data.dispose);
+      await show(
+        tester,
+        Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showDialog<bool>(
+                context: context,
+                builder: (_) => SupplyFormDialog(
+                  data: data,
+                  scan: (_) async => code,
+                  lookup: lookup,
+                ),
+              ),
+              child: const Text('Ouvrir'),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Ouvrir'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the supervisor scans a shower gel: an amenity is filled in', (
+      tester,
+    ) async {
+      final store = MemoryStore();
+      await openSupplyForm(
+        tester,
+        store,
+        code: '4305615834696',
+        lookup: ProductLookup(
+          client: MockClient(
+            (request) async => request.url.host == 'world.openbeautyfacts.org'
+                ? json({
+                    'status': 1,
+                    'product': {
+                      'product_name': 'Duschgel Relax 3in1',
+                      'brands': 'Isana',
+                      'quantity': '300 ml',
+                    },
+                  })
+                : json({'status': 0}),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Scanner le code-barres'));
+      await tester.pumpAndSettle();
+      String field(String label) => tester
+          .widget<TextFormField>(find.widgetWithText(TextFormField, label))
+          .controller!
+          .text;
+      expect(field('Article'), 'Duschgel Relax 3in1 300 ml');
+      expect(field('Unité'), 'flacons');
+      expect(find.text('Produits d’accueil'), findsOneWidget);
+      expect(
+        find.textContaining('Fiche Open Beauty Facts · 4305615834696'),
+        findsOneWidget,
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Quantité en stock'),
+        '40',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Seuil d’alerte'),
+        '10',
+      );
+      await tester.tap(find.text('Ajouter'));
+      await tester.pumpAndSettle();
+      final saved = (store.state['supplies'] as List).firstWhere(
+        (s) => s['name'] == 'Duschgel Relax 3in1 300 ml',
+      );
+      expect(saved['category'], 'accueil');
+      expect(saved['unit'], 'flacons');
+      expect(saved['quantity'], 40);
+    });
+
+    testWidgets('a drink found in Open Food Facts becomes a minibar item', (
+      tester,
+    ) async {
+      await openSupplyForm(
+        tester,
+        MemoryStore(),
+        code: '5449000000996',
+        lookup: ProductLookup(
+          client: MockClient(
+            (request) async => request.url.host == 'world.openfoodfacts.org'
+                ? json(cocaCola)
+                : json({'status': 0}),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Scanner le code-barres'));
+      await tester.pumpAndSettle();
+      expect(find.text('Minibar'), findsOneWidget);
+      expect(find.text('Prix de vente'), findsOneWidget, reason: 'minibar');
+      expect(
+        find.textContaining('Fiche Open Food Facts · 5449000000996'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('unknown everywhere: the stock form stays manual', (
+      tester,
+    ) async {
+      await openSupplyForm(
+        tester,
+        MemoryStore(),
+        code: '3017620422003',
+        lookup: ProductLookup(
+          client: MockClient((_) async => json({'status': 0})),
+        ),
+      );
+      await tester.tap(find.text('Scanner le code-barres'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Produit 3017620422003 introuvable : saisissez-le à la main.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Produits d’entretien'),
+        findsOneWidget,
+        reason: 'type kept',
+      );
     });
   });
 }

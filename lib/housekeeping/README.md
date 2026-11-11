@@ -174,7 +174,7 @@ sauvegarde restaurée).
 
 ## API publiques
 
-Deux services web gratuits, sans clé, en HTTPS. Sans Internet, l’application
+Trois services web gratuits, sans clé, en HTTPS. Sans Internet, l’application
 fonctionne comme avant (saisie à la main, description d’origine).
 
 - **Open Food Facts** (`services/product_lookup.dart`) : dans « Carte du
@@ -184,6 +184,13 @@ fonctionne comme avant (saisie à la main, description d’origine).
   produit. Le Manager ajoute le prix et le stock puis enregistre comme
   d’habitude. Seul le code-barres quitte le téléphone.
   `GET https://world.openfoodfacts.org/api/v2/product/<code>.json`
+- **Open Beauty Facts** (même service, même API) : dans l’onglet Stock →
+  « Nouvel article », « Scanner le code-barres » cherche d’abord dans Open
+  Beauty Facts (gel douche, shampooing, savon) : le nom est rempli et le type
+  passe à « Produits d’accueil » (unité « flacons »). Inconnu là, Open Food
+  Facts est interrogé : une boisson devient un article « Minibar ». Le linge
+  et les produits d’entretien restent saisis à la main.
+  `GET https://world.openbeautyfacts.org/api/v2/product/<code>.json`
 - **MyMemory** (`services/report_translation.dart`) : sur un signalement,
   « Traduire en français » affiche la traduction sous la description
   d’origine, avec la langue détectée (« anglais → français »). Rien n’est
@@ -215,7 +222,7 @@ services/
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
   housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
-  product_lookup.dart           fiche produit depuis un code-barres (Open Food Facts)
+  product_lookup.dart           fiche produit depuis un code-barres (Open Beauty / Food Facts)
   report_translation.dart       traduction des signalements en français (MyMemory)
   sync_rebase.dart              reconstruction dans l’ordre du serveur (version confirmée)
   sync_outbox.dart              file d’envoi remplie dans la transaction de l’action

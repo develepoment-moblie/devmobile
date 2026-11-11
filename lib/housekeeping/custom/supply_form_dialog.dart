@@ -3,14 +3,29 @@ import 'package:flutter/material.dart';
 import '../../shared/custom/app_theme.dart';
 import '../models/hotel_data.dart';
 import '../models/supply.dart';
+import '../screens/barcode_scan_screen.dart';
+import '../screens/minibar_catalog_screen.dart' show ProductFound;
+import '../services/product_lookup.dart';
 import 'draft_guard.dart';
 
 // Creates a stock item, or edits the name, unit and minimum of [supply].
 // Quantities change only through stock movements. Returns true once saved.
+// A new item can be filled in by scanning its barcode: Open Beauty Facts
+// (guest amenities) first, then Open Food Facts (minibar).
 class SupplyFormDialog extends StatefulWidget {
   final HotelData data;
   final Supply? supply;
-  const SupplyFormDialog({super.key, required this.data, this.supply});
+
+  /// Replaceable in tests (no camera, no network).
+  final ScanBarcode scan;
+  final ProductLookup? lookup;
+  const SupplyFormDialog({
+    super.key,
+    required this.data,
+    this.supply,
+    this.scan = scanProductBarcode,
+    this.lookup,
+  });
   @override
   State<SupplyFormDialog> createState() => _SupplyFormDialogState();
 }
@@ -32,6 +47,9 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
   );
   bool _busy = false;
   String? _error;
+  late final _lookup = widget.lookup ?? ProductLookup();
+  ProductInfo? _found;
+  String? _note;
   bool get _editing => widget.supply != null;
   bool get _dirty =>
       _name.text != (widget.supply?.name ?? '') ||
@@ -47,7 +65,43 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
     _quantity.dispose();
     _minimum.dispose();
     _price.dispose();
+    if (widget.lookup == null) _lookup.close();
     super.dispose();
+  }
+
+  // Scan the barcode; a sheet found sets the name and the type.
+  Future<void> _scan() async {
+    final code = await widget.scan(context);
+    if (code == null || !mounted) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _note = null;
+    });
+    try {
+      final product = await _lookup.find(
+        code,
+        sources: const [ProductSource.beauty, ProductSource.food],
+      );
+      if (!mounted) return;
+      setState(() {
+        _found = product;
+        if (product == null) {
+          _note = 'Produit $code introuvable : saisissez-le à la main.';
+          return;
+        }
+        _name.text = product.label;
+        final amenity = product.source == ProductSource.beauty;
+        _category = amenity ? 'accueil' : 'minibar';
+        if (_unit.text.trim().isEmpty) {
+          _unit.text = amenity ? 'flacons' : 'unités';
+        }
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   String? _count(String? v) {
@@ -125,6 +179,27 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
                   ),
                 ),
               ),
+            if (!_editing) ...[
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _scan,
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Scanner le code-barres'),
+              ),
+              if (_busy) const LinearProgressIndicator(),
+              if (_note != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    _note!,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              if (_found != null) ProductFound(_found!),
+              const SizedBox(height: 8),
+            ],
             TextFormField(
               controller: _name,
               enabled: !_busy,
@@ -141,6 +216,7 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
+              key: ValueKey(_category),
               initialValue: _category,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Type'),

@@ -265,7 +265,7 @@ class _MinibarItemDialogState extends State<MinibarItemDialog> {
                     ),
                   ),
                 ),
-              if (_found != null) _ProductFound(_found!),
+              if (_found != null) ProductFound(_found!),
               const SizedBox(height: 8),
             ],
             TextFormField(
@@ -340,10 +340,10 @@ class _MinibarItemDialogState extends State<MinibarItemDialog> {
   );
 }
 
-// The product Open Food Facts found: photo, brand, source.
-class _ProductFound extends StatelessWidget {
+// The product a database found: photo, brand, source.
+class ProductFound extends StatelessWidget {
   final ProductInfo product;
-  const _ProductFound(this.product);
+  const ProductFound(this.product, {super.key});
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(top: 8),
@@ -366,7 +366,7 @@ class _ProductFound extends StatelessWidget {
           child: Text(
             [
               if (product.brand != null) product.brand!,
-              'Fiche Open Food Facts · ${product.barcode}',
+              'Fiche ${product.source.label} · ${product.barcode}',
             ].join('\n'),
             style: const TextStyle(color: AppColors.muted, fontSize: 12),
           ),
