@@ -87,12 +87,15 @@ void main() {
     ...extra,
   });
 
-  // Every housekeeping table, rows sorted, for comparisons.
+  // Every housekeeping table a backup holds (not the phone's sync tables),
+  // rows sorted, for comparisons.
   Future<Map<String, List<String>>> dump() async {
     final db = session.database.database;
     final tables = await db.query(
       'sqlite_master',
-      where: "type = 'table' AND name LIKE 'housekeeping\\_%' ESCAPE '\\'",
+      where:
+          "type = 'table' AND name LIKE 'housekeeping\\_%' ESCAPE '\\' "
+          "AND name NOT LIKE 'housekeeping\\_sync\\_%' ESCAPE '\\'",
     );
     return {
       for (final t in tables)
@@ -143,6 +146,11 @@ void main() {
       expect(await dump(), before);
       expect(await voiceFile().readAsBytes(), [1, 2, 3, 4]);
       expect(signals, 1, reason: 'the screens are told to re-read');
+      expect(
+        await session.database.database.query('housekeeping_sync_outbox'),
+        isEmpty,
+        reason: 'actions made after the backup are not sent to the server',
+      );
       expect(
         (await backup.list()).map((b) => b.name),
         contains(
@@ -237,7 +245,7 @@ void main() {
       final old = await backup.backupNow();
       await session.database.close();
       await open();
-      expect(await session.database.versionOf('housekeeping'), 7);
+      expect(await session.database.versionOf('housekeeping'), 8);
       login('amina');
       await act('118', 'assign', {
         'employeeId': 'lina',
@@ -246,7 +254,7 @@ void main() {
       });
       login('manager');
       await backup.restore(await backup.readFile(old.path));
-      expect(await session.database.versionOf('housekeeping'), 7);
+      expect(await session.database.versionOf('housekeeping'), 8);
       expect((await room('305'))['note'], 'Ancienne');
       expect((await room('118'))['employeeId'], isNull);
       login('sarah');

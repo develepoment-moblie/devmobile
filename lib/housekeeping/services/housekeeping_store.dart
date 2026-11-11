@@ -19,7 +19,7 @@ import 'notification_rules.dart';
 // step to [migrate] for every change; never edit a step already pushed.
 final housekeepingSchema = ModuleSchema(
   module: 'housekeeping',
-  version: 7,
+  version: 8,
   migrate: (tx, from, to) async {
     if (from < 1) {
       await tx.execute('''CREATE TABLE housekeeping_rooms (
@@ -308,6 +308,29 @@ final housekeepingSchema = ModuleSchema(
         'ALTER TABLE housekeeping_cleanings ADD COLUMN late_notified_at TEXT',
       );
     }
+    if (from < 8) {
+      // Sync with the hotel server. These tables belong to this phone: a
+      // backup leaves them out and a restore keeps them (IF NOT EXISTS).
+      // Actions made here, waiting to be sent (same transaction as the action).
+      await tx.execute('''CREATE TABLE IF NOT EXISTS housekeeping_sync_outbox (
+        mutation_id TEXT PRIMARY KEY, path TEXT NOT NULL, body TEXT NOT NULL,
+        actor_id TEXT NOT NULL, applied_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending','rejected')),
+        attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT)''');
+      // Server address, this phone's id, last sequence number received...
+      await tx.execute('''CREATE TABLE IF NOT EXISTS housekeeping_sync_state (
+        key TEXT PRIMARY KEY, value TEXT NOT NULL)''');
+      // Actions of other phones the rules refused here (e.g. a version 409).
+      await tx.execute(
+        '''CREATE TABLE IF NOT EXISTS housekeeping_sync_conflicts (
+        mutation_id TEXT PRIMARY KEY, seq INTEGER NOT NULL,
+        path TEXT NOT NULL, actor_id TEXT NOT NULL, actor_name TEXT,
+        applied_at TEXT NOT NULL, message TEXT NOT NULL,
+        status INTEGER, received_at TEXT NOT NULL)''',
+      );
+    }
     // A new install gets its starting data once every table exists.
     if (from < 1) {
       await HousekeepingStore._write(tx, housekeepingSeedState());
@@ -482,6 +505,11 @@ class HousekeepingStore
         });
         _changes.add(null);
       });
+
+  /// Reads and writes the sync tables, queued like the changes but without
+  /// telling the screens (the sync bookkeeping is not housekeeping data).
+  Future<T> syncLedger<T>(Future<T> Function(Transaction tx) operation) =>
+      _queue(() => _db.transaction(operation));
 
   /// A read-only query on the module's tables, queued like the changes.
   Future<T> query<T>(Future<T> Function(DatabaseExecutor db) read) =>
@@ -1261,6 +1289,25 @@ class HousekeepingStore
           'notification': id,
         });
       }
+    }
+    // Sync: the action just applied goes in the outbox, and a replayed
+    // action moves the cursor, in the same transaction as the change.
+    for (final m in state.remove('_syncOutbox') as List? ?? []) {
+      await tx.insert('housekeeping_sync_outbox', {
+        'mutation_id': m['mutationId'],
+        'path': m['path'],
+        'body': jsonEncode(m['body']),
+        'actor_id': m['actorId'],
+        'applied_at': m['appliedAt'],
+        'created_at': m['appliedAt'],
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+    final cursor = state.remove('_syncCursor');
+    if (cursor is int) {
+      await tx.insert('housekeeping_sync_state', {
+        'key': 'last_seq',
+        'value': '$cursor',
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     final photos = state.remove('_photoWrites') as Map? ?? {};
     for (final entry in photos.entries) {

@@ -5,8 +5,12 @@ import 'package:flutter/material.dart';
 import '../../shared/custom/app_theme.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../custom/nova_icon.dart';
+import '../custom/sync_badge.dart';
 import '../models/hotel_data.dart';
+import '../services/housekeeping_store.dart';
+import '../services/housekeeping_sync.dart';
 import '../services/phone_alerts.dart';
+import '../services/sqlite_housekeeping.dart';
 import 'agent_dashboard_screen.dart';
 import 'agent_rooms_screen.dart';
 import 'details_screen.dart';
@@ -213,6 +217,17 @@ class _HousekeepingWorkspaceState extends State<HousekeepingWorkspace>
                   if (mounted) setState(() {});
                 },
               ),
+              // Shown once a hotel server is set (see SyncScreen).
+              if (data.api case SqliteHousekeeping(
+                store: final HousekeepingStore store,
+              ))
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: SyncBadge(
+                    sync: housekeepingSyncFor(store),
+                    padding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
+                  ),
+                ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: _refresh,

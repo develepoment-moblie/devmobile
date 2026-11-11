@@ -115,6 +115,47 @@ l’application (paquets `record`, `audioplayers`, `path_provider`, permission
 `RECORD_AUDIO`) ; SQLite ne garde que ce chemin relatif. Une note enregistrée
 puis abandonnée est supprimée du téléphone.
 
+## Synchronisation avec le serveur de l’hôtel
+
+Plusieurs téléphones partagent leur travail par un service web REST
+(`server/` à la racine du dépôt, voir `server/README.md`). Hors ligne
+d’abord : chaque action est enregistrée sur le téléphone, puis envoyée.
+
+- **File d’envoi** : une action nouvelle est mise dans
+  `housekeeping_sync_outbox` dans la même transaction que l’action elle-même
+  (`services/sync_outbox.dart`) ; une action refusée ne laisse rien.
+- **Synchroniser** (`services/housekeeping_sync.dart`) : d’abord
+  `GET /v1/sync/pull` (les actions des autres téléphones), rejouées une à une
+  par les mêmes règles, au nom de leur auteur (rôle relu dans `session.staff`,
+  droits, propriété, version) ; puis `POST /v1/sync/push` (la file).
+- **Mêmes identifiants partout** : pendant une action, les identifiants créés
+  et l’heure viennent de la modification (`inMutation` dans
+  `mutation_meta.dart`) ; rejouée ailleurs, elle crée les mêmes lignes.
+- **Sans doublon** : un `mutationId` déjà appliqué ne change rien, sur le
+  téléphone comme sur le serveur ; réessayer est donc sans risque.
+- **Conflits** : une action d’un autre téléphone refusée ici (par exemple une
+  version dépassée, 409) va dans `housekeeping_sync_conflicts` et s’affiche
+  dans « Synchronisation » ; elle n’écrase rien.
+- **Quand** : au démarrage, 2 s après chaque modification, toutes les 20 s,
+  et sur « Synchroniser ». Sans réseau : nouvel essai après 5 s, 10 s, 20 s…
+  jusqu’à 5 min.
+- **Écran** « Synchronisation » (gouvernante et Manager) : adresse du serveur,
+  « Tester la connexion », actions en attente, dernière synchronisation,
+  conflits. Pastille « Synchronisé / Hors ligne · n actions en attente » sous
+  l’en-tête pour tous.
+- **Adresse** : HTTP seulement pour une adresse du réseau local (10.x,
+  172.16-31.x, 192.168.x, localhost), sinon HTTPS.
+- **Sauvegardes** : les tables `housekeeping_sync_*` appartiennent au
+  téléphone ; une sauvegarde ne les contient pas. Une restauration vide la
+  file et rejoue les actions des autres téléphones depuis le début.
+
+Limites : les fichiers des notes vocales ne sont pas envoyés (seul leur
+chemin) ; les photos voyagent dans l’action. Les événements des autres
+modules (arrivées, départs, maintenance) restent propres à chaque téléphone.
+Le serveur ne vérifie pas qui envoie (réseau de l’hôtel supposé fermé). Les
+téléphones doivent partir des mêmes données (nouvelle installation ou même
+sauvegarde restaurée).
+
 ## Structure
 
 ```text
@@ -137,11 +178,13 @@ services/
   notification_rules.dart       catégories de notifications, retards
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
+  housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
+  sync_outbox.dart              file d’envoi remplie dans la transaction de l’action
   voice_notes.dart              enregistrement et lecture des notes vocales
   evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
 ```
 
-Tables (version 7) : `housekeeping_rooms`, `housekeeping_photos`,
+Tables (version 8) : `housekeeping_rooms`, `housekeeping_photos`,
 `housekeeping_supplies`, `housekeeping_notifications`,
 `housekeeping_notification_reads`, `housekeeping_cleanings` (journal des
 nettoyages : durée, score d’inspection), `housekeeping_timer_segments`,
@@ -156,5 +199,6 @@ objets trouvés), `housekeeping_settings` (délai d’archivage),
 `housekeeping_laundry_batches`, `housekeeping_laundry_lines`,
 `housekeeping_supply_requests`, `housekeeping_supply_request_lines`,
 `housekeeping_minibar_consumptions`, `housekeeping_stays`,
-`housekeeping_notification_prefs`.
+`housekeeping_notification_prefs`, `housekeeping_sync_outbox`,
+`housekeeping_sync_state`, `housekeeping_sync_conflicts` (synchronisation).
 Une nouvelle installation reçoit des chambres et un stock fictifs.

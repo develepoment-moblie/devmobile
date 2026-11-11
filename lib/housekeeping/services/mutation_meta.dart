@@ -1,13 +1,46 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:pointycastle/export.dart';
 
 // Every housekeeping mutation carries a client-generated id and the client's
 // clock, so an offline queue can replay it safely: a repeated id is ignored.
 
 final _random = Random.secure();
 
-/// A random (version 4) UUID, e.g. 3f2b8c1e-9a4d-4c7e-b1f0-6d2e8a9c0b13.
+/// The ids and the time the rules use while one mutation is applied.
+/// They come from the mutation itself, so the same mutation replayed on
+/// another phone (sync) creates the same rows with the same ids.
+class _MutationScope {
+  final String seed;
+  final DateTime now;
+  int _next = 0;
+  _MutationScope(this.seed, this.now);
+
+  List<int> bytes() => (SHA256Digest().process(
+    Uint8List.fromList(utf8.encode('$seed/${_next++}')),
+  )).sublist(0, 16);
+}
+
+const _scopeKey = #housekeepingMutationScope;
+
+/// Runs [apply] with ids derived from [mutationId] and [now] as the time of
+/// the change (see [uuidV4] and [mutationNow]).
+T inMutation<T>(String mutationId, DateTime now, T Function() apply) =>
+    runZoned(apply, zoneValues: {_scopeKey: _MutationScope(mutationId, now)});
+
+/// The time of the mutation being applied, else the phone's clock.
+DateTime mutationNow() =>
+    (Zone.current[_scopeKey] as _MutationScope?)?.now ?? DateTime.now();
+
+/// A (version 4) UUID, e.g. 3f2b8c1e-9a4d-4c7e-b1f0-6d2e8a9c0b13. Random,
+/// except inside [inMutation] where it is derived from the mutation id.
 String uuidV4() {
-  final b = List<int>.generate(16, (_) => _random.nextInt(256));
+  final scope = Zone.current[_scopeKey] as _MutationScope?;
+  final b =
+      scope?.bytes() ?? List<int>.generate(16, (_) => _random.nextInt(256));
   b[6] = (b[6] & 0x0f) | 0x40; // version 4
   b[8] = (b[8] & 0x3f) | 0x80; // RFC 4122 variant
   String hex(int from, int to) =>

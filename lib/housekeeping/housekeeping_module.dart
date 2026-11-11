@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../shared/models/app_user.dart';
@@ -7,6 +9,7 @@ import '../shared/services/app_session.dart';
 import 'screens/housekeeping_home_screen.dart';
 import 'services/hotel_event_handlers.dart';
 import 'services/housekeeping_store.dart';
+import 'services/housekeeping_sync.dart';
 
 // One store per session, shared by the screens and the event listeners so
 // their database operations run one after another.
@@ -43,10 +46,20 @@ class HousekeepingModule extends NovaModule {
   ModuleSchema get schema => housekeepingSchema;
 
   // Check-in/out from reservations and maintenance updates change room status
-  // even when nobody has the module open.
+  // even when nobody has the module open. The sync with the hotel server
+  // starts with the app once a server address is set.
   @override
-  void attach(AppSession session) =>
-      listenToHotelEvents(session.events, housekeepingStoreFor(session));
+  void attach(AppSession session) {
+    final store = housekeepingStoreFor(session);
+    listenToHotelEvents(session.events, store);
+    unawaited(
+      housekeepingSyncFor(store).start().then<void>(
+        (_) {},
+        onError: (Object e) =>
+            debugPrint('housekeeping: synchronisation non démarrée ($e)'),
+      ),
+    );
+  }
 
   @override
   Widget buildHome(BuildContext context, AppSession session) =>
