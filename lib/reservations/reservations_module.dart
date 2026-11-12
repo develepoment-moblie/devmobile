@@ -5,7 +5,7 @@ import '../shared/models/nova_module.dart';
 import '../shared/services/app_session.dart';
 import 'screens/reservations_home_screen.dart';
 
-// Entry point of the Réservations module. Owner: à compléter.
+// Entry point of the Réservations module. Owner: Yassmine.
 // Everything for this module lives in lib/reservations/. See lib/reservations/README.md.
 class ReservationsModule extends NovaModule {
   const ReservationsModule();
@@ -19,7 +19,7 @@ class ReservationsModule extends NovaModule {
   @override
   IconData get icon => Icons.calendar_month_outlined;
   @override
-  String get owner => 'à compléter';
+  String get owner => 'Yassmine';
   @override
   Set<String> get roles => {
     AppRole.receptionist,

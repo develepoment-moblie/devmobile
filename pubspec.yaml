@@ -57,6 +57,11 @@ flutter:
   assets:
     - assets/images/nova_paris_logo.png
     - assets/images/nova_paris_logo_light.png
+    # reservations (Yassmine): room photos
+    - assets/images/deluxe.jpg
+    - assets/images/double.jpg
+    - assets/images/family.jpg
+    - assets/images/suite.jpg
   fonts:
     - family: Manrope
       fonts:
