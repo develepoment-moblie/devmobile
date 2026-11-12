@@ -172,6 +172,51 @@ Le serveur ne vérifie pas qui envoie (réseau de l’hôtel supposé fermé). L
 téléphones doivent partir des mêmes données (nouvelle installation ou même
 sauvegarde restaurée).
 
+## API publiques
+
+Trois services web gratuits, sans clé, en HTTPS. Sans Internet, l’application
+fonctionne comme avant (saisie à la main, description d’origine).
+
+- **Open Food Facts** (`services/product_lookup.dart`) : dans « Carte du
+  minibar » → « Nouvel article », « Scanner le code-barres » ouvre la caméra
+  (`screens/barcode_scan_screen.dart`, EAN-13, EAN-8, UPC) ; l’API remplit
+  le nom et la contenance (« Coca-Cola 330 ml ») et montre la photo du
+  produit. Le Manager ajoute le prix et le stock puis enregistre comme
+  d’habitude. Seul le code-barres quitte le téléphone.
+  `GET https://world.openfoodfacts.org/api/v2/product/<code>.json`
+- **Open Beauty Facts** (même service, même API) : dans l’onglet Stock →
+  « Nouvel article », « Scanner le code-barres » cherche d’abord dans Open
+  Beauty Facts (gel douche, shampooing, savon) : le nom est rempli et le type
+  passe à « Produits d’accueil » (unité « flacons »). Inconnu là, Open Food
+  Facts est interrogé : une boisson devient un article « Minibar ». Le linge
+  et les produits d’entretien restent saisis à la main.
+  `GET https://world.openbeautyfacts.org/api/v2/product/<code>.json`
+- **MyMemory** (`services/report_translation.dart`) : sur un signalement,
+  « Traduire en français » affiche la traduction sous la description
+  d’origine, avec la langue détectée (« anglais → français »). Rien n’est
+  enregistré ; seul le texte du signalement est envoyé. Quota gratuit
+  d’environ 5 000 mots par jour ; un texte de plus de 500 octets est envoyé
+  en morceaux.
+  `GET https://api.mymemory.translated.net/get?q=…&langpair=autodetect|fr`
+
+## Hôtel de démonstration (présentation)
+
+`flutter build apk --release --dart-define=HOUSEKEEPING_SAMPLE_DATA=false --dart-define=HOUSEKEEPING_DEMO_DATA=true`
+: au démarrage, si l’hôtel n’a aucune chambre, le module le remplit une fois
+(`services/demo_hotel.dart`, environ 40 s sur le téléphone), par les mêmes
+règles que les écrans, au nom de chaque personne de l’équipe de démo (la
+personne connectée sur le téléphone n’est pas touchée ; les écrans se mettent
+à jour au fur et à mesure). Un remplissage interrompu est refait au
+lancement suivant (repère dans `housekeeping_sync_state`) ; rien n’est mis en
+file pour le serveur, et un téléphone réglé sur un serveur n’est pas rempli.
+La journée en cours se place dans les heures qui précèdent le remplissage.
+Contenu : 26 chambres sur 4 étages, cinq jours de nettoyages
+avec photos et inspections, et la journée en cours dans tous les états
+(à valider, en cours, en pause, à faire, non attribuée, hors service),
+signalements (dont un en anglais et un en arabe pour la traduction), objets
+trouvés, demandes de produits, blanchisserie, minibar. Équipe de démo :
+Manager Démo, Amina (gouvernante), Sarah, Lina, Youssef (« Comptes de test »).
+
 ## Structure
 
 ```text
@@ -195,6 +240,10 @@ services/
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
   housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
+  http_guard.dart               appels web : délai, absence de réseau, réponse JSON
+  demo_hotel.dart               hôtel de démonstration (option de compilation)
+  product_lookup.dart           fiche produit depuis un code-barres (Open Beauty / Food Facts)
+  report_translation.dart       traduction des signalements en français (MyMemory)
   sync_rebase.dart              reconstruction dans l’ordre du serveur (version confirmée)
   sync_outbox.dart              file d’envoi remplie dans la transaction de l’action
   voice_notes.dart              enregistrement et lecture des notes vocales

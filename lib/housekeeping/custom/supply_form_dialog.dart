@@ -3,14 +3,29 @@ import 'package:flutter/material.dart';
 import '../../shared/custom/app_theme.dart';
 import '../models/hotel_data.dart';
 import '../models/supply.dart';
+import '../screens/barcode_scan_screen.dart';
+import 'product_scan.dart';
+import '../services/product_lookup.dart';
 import 'draft_guard.dart';
 
 // Creates a stock item, or edits the name, unit and minimum of [supply].
 // Quantities change only through stock movements. Returns true once saved.
+// A new item can be filled in by scanning its barcode: Open Beauty Facts
+// (guest amenities) first, then Open Food Facts (minibar).
 class SupplyFormDialog extends StatefulWidget {
   final HotelData data;
   final Supply? supply;
-  const SupplyFormDialog({super.key, required this.data, this.supply});
+
+  /// Replaceable in tests (no camera, no network).
+  final ScanBarcode scan;
+  final ProductLookup? lookup;
+  const SupplyFormDialog({
+    super.key,
+    required this.data,
+    this.supply,
+    this.scan = scanProductBarcode,
+    this.lookup,
+  });
   @override
   State<SupplyFormDialog> createState() => _SupplyFormDialogState();
 }
@@ -49,6 +64,16 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
     _price.dispose();
     super.dispose();
   }
+
+  // A product found by its barcode sets the name, the type and the unit.
+  void _found(ProductInfo product) => setState(() {
+    _name.text = product.label;
+    final amenity = product.source == ProductSource.beauty;
+    _category = amenity ? 'accueil' : 'minibar';
+    if (_unit.text.trim().isEmpty) {
+      _unit.text = amenity ? 'flacons' : 'unités';
+    }
+  });
 
   String? _count(String? v) {
     final n = int.tryParse(v?.trim() ?? '');
@@ -125,6 +150,15 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
                   ),
                 ),
               ),
+            if (!_editing)
+              ProductScan(
+                sources: const [ProductSource.beauty, ProductSource.food],
+                enabled: !_busy,
+                scan: widget.scan,
+                lookup: widget.lookup,
+                onBusy: (busy) => setState(() => _busy = busy),
+                onFound: _found,
+              ),
             TextFormField(
               controller: _name,
               enabled: !_busy,
@@ -141,6 +175,7 @@ class _SupplyFormDialogState extends State<SupplyFormDialog> {
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
+              key: ValueKey(_category),
               initialValue: _category,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Type'),
