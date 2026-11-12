@@ -6,6 +6,7 @@ import '../../shared/models/app_user.dart';
 import '../models/intervention.dart';
 import '../../shared/services/app_session.dart';
 import '../services/maintenance_store.dart';
+import '../services/translation_service.dart';
 import '../custom/maintenance_theme.dart';
 import '../custom/maintenance_header.dart';
 import '../custom/photo_picker.dart';
@@ -35,6 +36,11 @@ class _InterventionDetailScreenState extends State<InterventionDetailScreen> {
   List<Uint8List> _photos = [];
   bool _loading = true;
   bool _busy = false;
+
+  // ----- Traduction de la description (FR <-> EN) -----
+  bool _showEnglish = false; // true = on affiche la version anglaise
+  bool _translating = false; // true = appel API en cours
+  String? _descEn; // traduction gardée en mémoire (évite de rappeler l'API)
 
   AppUser? get _me => widget.session.user;
   String? get _myId => _me?.id;
@@ -81,6 +87,36 @@ class _InterventionDetailScreenState extends State<InterventionDetailScreen> {
       _snack('Une erreur est survenue.');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 1er clic : traduit (appel API) et remplace le texte affiché.
+  /// Clic suivant : revient à l'original, puis rebascule sans nouvel appel.
+  /// Le texte stocké en base n'est jamais modifié.
+  Future<void> _toggleTranslation(String original) async {
+    if (_translating) return;
+
+    if (_showEnglish) {
+      setState(() => _showEnglish = false);
+      return;
+    }
+    if (_descEn != null) {
+      setState(() => _showEnglish = true);
+      return;
+    }
+
+    setState(() => _translating = true);
+    try {
+      final en = await TranslationService.toEnglish(original);
+      if (!mounted) return;
+      setState(() {
+        _descEn = en;
+        _showEnglish = true;
+      });
+    } catch (_) {
+      _snack('Traduction impossible. Vérifiez votre connexion.');
+    } finally {
+      if (mounted) setState(() => _translating = false);
     }
   }
 
@@ -268,11 +304,7 @@ class _InterventionDetailScreenState extends State<InterventionDetailScreen> {
             const SizedBox(height: 14),
             _InfoRow(Icons.meeting_room_outlined, 'Chambre', i.room),
             _InfoRow(i.category.icon, 'Catégorie', i.category.label),
-            _InfoRow(
-              Icons.person_outline,
-              'Signalé par',
-              i.reporterName ?? 'Inconnu',
-            ),
+            _InfoRow(Icons.person_outline, 'Signalé par', i.reporterLabel),
             _InfoRow(
               Icons.engineering_outlined,
               'Technicien',
@@ -294,7 +326,39 @@ class _InterventionDetailScreenState extends State<InterventionDetailScreen> {
         const SizedBox(height: 22),
         Text('Description', style: mt(15, weight: FontWeight.w700)),
         const SizedBox(height: 8),
-        Text(i.description, style: mt(13, color: MC.text, height: 1.4)),
+        Text(
+          _showEnglish && _descEn != null ? _descEn! : i.description,
+          style: mt(13, color: MC.text, height: 1.4),
+        ),
+        const SizedBox(height: 6),
+        TextButton.icon(
+          onPressed: _translating
+              ? null
+              : () => _toggleTranslation(i.description),
+          style: TextButton.styleFrom(
+            padding: EdgeInsets.zero,
+            minimumSize: const Size(0, 32),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          icon: _translating
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: MC.terra,
+                  ),
+                )
+              : const Icon(Icons.translate, size: 16, color: MC.terra),
+          label: Text(
+            _translating
+                ? 'Traduction...'
+                : (_showEnglish
+                      ? "Voir l'original (français)"
+                      : 'Traduire en anglais'),
+            style: mt(12, weight: FontWeight.w700, color: MC.terra),
+          ),
+        ),
       ],
 
       // ===== Photos =====

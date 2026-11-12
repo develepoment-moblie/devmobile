@@ -12,6 +12,7 @@ import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_session.dart';
 import 'package:nova_paris/user_management/services/demo_staff_directory.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 const _karim = AppUser(
@@ -32,6 +33,10 @@ void main() {
   late MaintenanceStore store;
   setUpAll(sqfliteFfiInit);
   setUp(() async {
+    // The weather check ran just now: the screens never call Open-Meteo here.
+    SharedPreferences.setMockInitialValues({
+      'maintenance_weather_last_check': DateTime.now().millisecondsSinceEpoch,
+    });
     directory = await Directory.systemTemp.createTemp('nova_maintenance_');
     final database = await AppDatabase.open(
       schemas: [maintenanceSchema],

@@ -66,6 +66,9 @@ class Intervention {
   final DateTime createdAt;
   final DateTime? resolvedAt;
 
+  /// 'manual' (signalement) ou 'weather' (alerte météo automatique)
+  final String source;
+
   const Intervention({
     required this.id,
     required this.title,
@@ -80,6 +83,7 @@ class Intervention {
     this.assigneeId,
     this.assigneeName,
     this.resolvedAt,
+    this.source = 'manual',
   });
 
   factory Intervention.fromMap(Map<String, Object?> m) => Intervention(
@@ -97,9 +101,18 @@ class Intervention {
     createdAt:
         DateTime.tryParse((m['created_at'] as String?) ?? '') ?? DateTime.now(),
     resolvedAt: DateTime.tryParse((m['resolved_at'] as String?) ?? ''),
+    source: (m['source'] as String?) ?? 'manual',
   );
 
   bool get isResolved => status == InterventionStatus.resolved;
+
+  bool get isWeatherAlert => source == 'weather';
+
+  /// "Ch. 305" pour une chambre, "Tout l'hôtel" pour une alerte météo.
+  String get roomLabel => isWeatherAlert ? room : 'Ch. $room';
+
+  String get reporterLabel =>
+      reporterName ?? (isWeatherAlert ? 'Alerte météo automatique' : 'Inconnu');
 
   /// Prénom du technicien assigné (null si non assignée).
   String? get assigneeFirstName {
@@ -117,5 +130,5 @@ class Intervention {
 
   /// Ex : "Ch. 305 · Karim · Il y a 18 min"
   String get subtitle =>
-      'Ch. $room · ${assigneeFirstName ?? 'Non assignée'} · ${timeAgo()}';
+      '$roomLabel · ${assigneeFirstName ?? 'Non assignée'} · ${timeAgo()}';
 }

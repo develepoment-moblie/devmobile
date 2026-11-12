@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../models/intervention.dart';
+import '../services/ai_diagnosis_service.dart';
 import '../../shared/services/app_session.dart';
 import '../services/maintenance_store.dart';
 import '../custom/maintenance_theme.dart';
@@ -37,6 +38,11 @@ class _ReportProblemScreenState extends State<ReportProblemScreen> {
   final List<Uint8List> _photos = [];
   bool _saving = false;
 
+  // IA : on ne remplace jamais ce que l'utilisateur a déjà choisi.
+  bool _categoryTouched = false;
+  bool _priorityTouched = false;
+  bool _aiAnalyzed = false;
+
   @override
   void initState() {
     super.initState();
@@ -55,7 +61,66 @@ class _ReportProblemScreenState extends State<ReportProblemScreen> {
 
   Future<void> _addPhoto() async {
     final bytes = await pickInterventionPhoto(context);
-    if (bytes != null && mounted) setState(() => _photos.add(bytes));
+    if (bytes == null || !mounted) return;
+    setState(() => _photos.add(bytes));
+    if (!_aiAnalyzed) _analyzePhoto(bytes);
+  }
+
+  /// Diagnostic IA de la 1re photo : pré-remplit titre, description,
+  /// catégorie et priorité (champs encore vides / non touchés uniquement).
+  /// Inactif si aucune clé n'est configurée (AI_API_KEY).
+  Future<void> _analyzePhoto(Uint8List bytes) async {
+    if (!AiDiagnosisService.isConfigured) return;
+    _aiAnalyzed = true;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text("Analyse de la photo par l'IA…"),
+        duration: Duration(seconds: 30),
+      ),
+    );
+
+    final result = await AiDiagnosisService.analyze(
+      image: bytes,
+      hint: _title.text,
+    );
+
+    messenger.hideCurrentSnackBar();
+    if (!mounted) return;
+
+    if (result == null) {
+      _aiAnalyzed = false; // permet de réessayer avec une autre photo
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Analyse IA indisponible : remplissez le formulaire.'),
+        ),
+      );
+      return;
+    }
+    if (!result.isMaintenanceIssue) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Aucun problème de maintenance détecté sur la photo.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      if (_title.text.trim().isEmpty) _title.text = result.title;
+      if (_description.text.trim().isEmpty) {
+        _description.text = result.description;
+      }
+      if (!_categoryTouched) _category = result.category;
+      if (!_priorityTouched) _priority = result.priority;
+    });
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text("Champs pré-remplis par l'IA. Vérifiez avant d'envoyer."),
+      ),
+    );
   }
 
   Future<void> _submit() async {
@@ -131,7 +196,10 @@ class _ReportProblemScreenState extends State<ReportProblemScreen> {
                         selected: c == _category,
                         selectedBg: MC.dark,
                         selectedFg: Colors.white,
-                        onTap: () => setState(() => _category = c),
+                        onTap: () => setState(() {
+                          _category = c;
+                          _categoryTouched = true;
+                        }),
                       ),
                   ],
                 ),
@@ -147,7 +215,10 @@ class _ReportProblemScreenState extends State<ReportProblemScreen> {
                         selected: p == _priority,
                         selectedBg: p.background,
                         selectedFg: p.foreground,
-                        onTap: () => setState(() => _priority = p),
+                        onTap: () => setState(() {
+                          _priority = p;
+                          _priorityTouched = true;
+                        }),
                       ),
                   ],
                 ),

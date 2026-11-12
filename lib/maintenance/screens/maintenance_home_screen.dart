@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/intervention.dart';
 import '../../shared/services/app_session.dart';
 import '../services/maintenance_store.dart';
+import '../services/weather_maintenance_service.dart';
 import 'intervention_detail_screen.dart';
 import 'intervention_history_screen.dart';
 import '../custom/maintenance_theme.dart';
@@ -52,6 +53,18 @@ class _MaintenanceHomeScreenState extends State<MaintenanceHomeScreen> {
     }
   }
 
+  /// Maintenance prédictive : crée en arrière-plan les alertes météo
+  /// (aucun changement visuel : elles apparaissent dans la liste).
+  Future<void> _checkWeather() async {
+    final created = await WeatherMaintenanceService.runIfDue(_store);
+    if (created > 0 && mounted) await _load();
+  }
+
+  Future<void> _refresh() async {
+    await _load();
+    await _checkWeather();
+  }
+
   Future<void> _open(Widget page) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
     if (mounted) _load();
@@ -63,7 +76,7 @@ class _MaintenanceHomeScreenState extends State<MaintenanceHomeScreen> {
       bottom: false,
       child: RefreshIndicator(
         color: MC.terra,
-        onRefresh: _load,
+        onRefresh: _refresh,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
