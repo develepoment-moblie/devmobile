@@ -1,14 +1,14 @@
 # Module Maintenance
 
-Responsable : **à compléter** · Dossier : `lib/maintenance/` · Tests : `test/maintenance/`
+Responsable : **Ayoub Belgacem** · Dossier : `lib/maintenance/` · Tests : `test/maintenance/`
 
 Signalements avec photo, interventions, urgences et historique.
 
 ## Fonctionnalités (cahier des charges)
 
-- [ ] Signalement avec photo
-- [ ] Attribution et suivi (en attente, en cours, résolu)
-- [ ] Priorisation des urgences
+- [x] Signalement avec photo
+- [x] Attribution et suivi (en attente, en cours, résolu)
+- [x] Priorisation des urgences
 - [ ] Historique par chambre
 - [ ] Maintenance préventive
 
