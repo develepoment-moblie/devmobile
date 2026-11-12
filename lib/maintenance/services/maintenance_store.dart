@@ -5,16 +5,18 @@ import 'package:sqflite/sqflite.dart';
 import '../../shared/models/app_user.dart';
 import '../../shared/services/app_database.dart';
 import '../models/intervention.dart';
+import 'maintenance_config.dart';
 
-/// Tables du module Maintenance (version 1).
+/// Tables du module Maintenance.
+/// 1 : interventions et photos. 2 : origine (manuelle / alerte météo).
 const maintenanceSchema = ModuleSchema(
   module: 'maintenance',
-  version: 1,
+  version: 2,
   migrate: _migrate,
 );
 
 Future<void> _migrate(Transaction tx, int from, int to) async {
-  if (from < 1) {
+  if (from < 1 && to >= 1) {
     await tx.execute('''
       CREATE TABLE maintenance_interventions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,6 +49,15 @@ Future<void> _migrate(Transaction tx, int from, int to) async {
     await tx.execute(
       'CREATE INDEX maintenance_photos_intervention '
       'ON maintenance_photos (intervention_id)',
+    );
+  }
+  if (from < 2 && to >= 2) {
+    await tx.execute(
+      "ALTER TABLE maintenance_interventions "
+      "ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
+    );
+    await tx.execute(
+      'ALTER TABLE maintenance_interventions ADD COLUMN source_key TEXT',
     );
   }
 }
@@ -113,6 +124,8 @@ class MaintenanceStore {
     String description = '',
     AppUser? reporter,
     List<Uint8List> photos = const [],
+    String source = 'manual',
+    String? sourceKey,
   }) {
     final now = DateTime.now().toIso8601String();
     return db.transaction<int>((txn) async {
@@ -125,6 +138,8 @@ class MaintenanceStore {
         'status': InterventionStatus.pending.dbValue,
         'reporter_id': reporter?.id,
         'reporter_name': reporter?.fullName,
+        'source': source,
+        'source_key': sourceKey,
         'created_at': now,
         'updated_at': now,
       });
@@ -137,6 +152,24 @@ class MaintenanceStore {
       }
       return id;
     });
+  }
+
+  /// Vrai s'il existe déjà une alerte automatique de ce type encore active,
+  /// ou résolue depuis moins de 48 h (évite les doublons).
+  Future<bool> hasActiveOrRecentAlert({
+    required String source,
+    required String sourceKey,
+  }) async {
+    final since = DateTime.now()
+        .subtract(MaintenanceConfig.alertCooldown)
+        .toIso8601String();
+    final rows = await db.rawQuery(
+      'SELECT 1 FROM maintenance_interventions '
+      'WHERE source = ? AND source_key = ? '
+      "AND (status != 'resolved' OR resolved_at > ?) LIMIT 1",
+      [source, sourceKey, since],
+    );
+    return rows.isNotEmpty;
   }
 
   Future<void> addPhoto(int interventionId, Uint8List bytes) =>
