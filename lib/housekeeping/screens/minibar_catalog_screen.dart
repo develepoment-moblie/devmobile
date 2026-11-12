@@ -4,20 +4,38 @@ import 'package:flutter/services.dart';
 import '../../shared/custom/app_theme.dart';
 import '../custom/draft_guard.dart';
 import '../custom/housekeeping_widgets.dart';
+import '../custom/product_scan.dart';
 import '../models/catalog_data.dart';
 import '../models/supply.dart';
+import '../services/product_lookup.dart';
 import '../services/room_catalog_backend.dart';
+import 'barcode_scan_screen.dart';
 
-// The Manager's minibar catalog: items and sale prices.
+// The Manager's minibar catalog: items and sale prices. A new item can be
+// filled in by scanning its barcode (Open Food Facts).
 class MinibarCatalogScreen extends StatelessWidget {
   final CatalogData catalog;
-  const MinibarCatalogScreen({super.key, required this.catalog});
+
+  /// Replaceable in tests (no camera, no network).
+  final ScanBarcode scan;
+  final ProductLookup? lookup;
+  const MinibarCatalogScreen({
+    super.key,
+    required this.catalog,
+    this.scan = scanProductBarcode,
+    this.lookup,
+  });
 
   Future<void> _edit(BuildContext context, [Supply? item]) async {
     final saved = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => MinibarItemDialog(catalog: catalog, item: item),
+      builder: (_) => MinibarItemDialog(
+        catalog: catalog,
+        item: item,
+        scan: scan,
+        lookup: lookup,
+      ),
     );
     if (context.mounted && saved == true) {
       showFeedback(
@@ -110,7 +128,15 @@ class MinibarCatalogScreen extends StatelessWidget {
 class MinibarItemDialog extends StatefulWidget {
   final CatalogData catalog;
   final Supply? item;
-  const MinibarItemDialog({super.key, required this.catalog, this.item});
+  final ScanBarcode scan;
+  final ProductLookup? lookup;
+  const MinibarItemDialog({
+    super.key,
+    required this.catalog,
+    this.item,
+    this.scan = scanProductBarcode,
+    this.lookup,
+  });
   @override
   State<MinibarItemDialog> createState() => _MinibarItemDialogState();
 }
@@ -190,6 +216,15 @@ class _MinibarItemDialogState extends State<MinibarItemDialog> {
           children: [
             if (_error != null)
               Text(_error!, style: const TextStyle(color: AppColors.red)),
+            if (widget.item == null)
+              ProductScan(
+                sources: const [ProductSource.food],
+                enabled: !_busy,
+                scan: widget.scan,
+                lookup: widget.lookup,
+                onBusy: (busy) => setState(() => _busy = busy),
+                onFound: (product) => _name.text = product.label,
+              ),
             TextFormField(
               controller: _name,
               enabled: !_busy,

@@ -105,9 +105,14 @@ void main() {
     expect(find.text('Utilisateurs'), findsNothing);
 
     await tester.tap(find.text('Maintenance'));
-    await tester.pumpAndSettle();
-    expect(find.text('Module en construction'), findsOneWidget);
-    await tester.tap(find.byType(BackButton));
+    for (var i = 0; i < 12; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 40)),
+      );
+    }
+    expect(find.text('Signaler un problème'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.chevron_left_rounded));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byTooltip('Mon profil'));

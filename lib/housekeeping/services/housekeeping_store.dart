@@ -515,13 +515,19 @@ class HousekeepingStore
   Future<Map<String, dynamic>> readState() =>
       _queue(() async => _read(_db, await _staff()));
 
+  /// [checkSession]: refuse the change when the signed-in user changed
+  /// meanwhile (a screen's action). The demo hotel, acting as its own
+  /// people, does not depend on who is signed in.
   @override
-  Future<void> change(void Function(Map<String, dynamic>) action) {
+  Future<void> change(
+    void Function(Map<String, dynamic>) action, {
+    bool checkSession = true,
+  }) {
     final user = session.user;
     return _queue(() async {
       final staff = await _staff();
       await _db.transaction((tx) async {
-        if (session.user?.id != user?.id) {
+        if (checkSession && session.user?.id != user?.id) {
           fail('Session modifiée. Réessayez.', 409);
         }
         final state = await _read(tx, staff);
@@ -533,12 +539,15 @@ class HousekeepingStore
   }
 
   /// A change made on behalf of another module (an event), without a user.
-  /// Like [localChange], it goes into the confirmed version too.
-  Future<void> systemChange(void Function(Map<String, dynamic>) action) =>
-      _queue(() async {
-        await _db.transaction((tx) => _applyLocal(tx, const [], action));
-        _changes.add(null);
-      });
+  /// Like [localChange], it goes into the confirmed version too. [at] is
+  /// the time of the change (now by default; the demo hotel sets its own).
+  Future<void> systemChange(
+    void Function(Map<String, dynamic>) action, {
+    DateTime? at,
+  }) => _queue(() async {
+    await _db.transaction((tx) => _applyLocal(tx, const [], action, at));
+    _changes.add(null);
+  });
 
   /// A rule of the module run on this phone, with no client mutation id
   /// (late cleanings, archiving of found items). Applied to the data and to
@@ -562,10 +571,11 @@ class HousekeepingStore
   static Future<void> _applyLocal(
     Transaction tx,
     List<AppUser> staff,
-    void Function(Map<String, dynamic>) action,
-  ) async {
+    void Function(Map<String, dynamic>) action, [
+    DateTime? at,
+  ]) async {
     final seed = uuidV4();
-    final now = DateTime.now();
+    final now = at ?? DateTime.now();
     final state = await _read(tx, staff);
     final base = await loadSyncBase(tx);
     if (base != null) {
@@ -611,6 +621,19 @@ class HousekeepingStore
       'seq': seq,
       'state': jsonEncode(clean),
       'photos': jsonEncode(photoIds(clean).toList()),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// After the data was replaced as a whole (backup restore, demo hotel):
+  /// the queue goes with the old data, the confirmed version starts again
+  /// from the new data and the server's list is read from the start.
+  static Future<void> resetSync(DatabaseExecutor tx) async {
+    await tx.delete('housekeeping_sync_outbox');
+    await tx.delete('housekeeping_sync_conflicts');
+    await tx.delete('housekeeping_sync_base');
+    await tx.insert('housekeeping_sync_state', {
+      'key': 'last_seq',
+      'value': '0',
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 

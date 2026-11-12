@@ -4,7 +4,6 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
 
 import '../../shared/models/app_user.dart';
 import 'app_exception.dart';
@@ -28,7 +27,7 @@ class HousekeepingBackup {
   static const keepAutomatic = 7;
 
   /// Tables with a REFERENCES to another table: dropped first.
-  static const _children = {
+  static const childTables = <String>{
     'housekeeping_notification_reads',
     'housekeeping_inspection_items',
     'housekeeping_issue_photos',
@@ -40,7 +39,7 @@ class HousekeepingBackup {
   /// The housekeeping tables a backup holds. The sync tables (server
   /// address, this phone's id, outbox) belong to the phone: a backup leaves
   /// them out and a restore keeps them.
-  static const _moduleTables =
+  static const moduleTables =
       "type = 'table' AND name LIKE 'housekeeping\\_%' ESCAPE '\\' "
       "AND name NOT LIKE 'housekeeping\\_sync\\_%' ESCAPE '\\'";
 
@@ -96,7 +95,7 @@ class HousekeepingBackup {
       for (final t in await db.query(
         'sqlite_master',
         columns: ['name', 'sql'],
-        where: _moduleTables,
+        where: moduleTables,
         orderBy: 'name',
       )) {
         tables[t['name'] as String] = {
@@ -270,13 +269,13 @@ class HousekeepingBackup {
             for (final t in await tx.query(
               'sqlite_master',
               columns: ['name'],
-              where: _moduleTables,
+              where: moduleTables,
             ))
               t['name'] as String,
           ]..sort(
             (a, b) =>
-                (_children.contains(a) ? 0 : 1) -
-                (_children.contains(b) ? 0 : 1),
+                (childTables.contains(a) ? 0 : 1) -
+                (childTables.contains(b) ? 0 : 1),
           );
       for (final t in current) {
         await tx.execute('DROP TABLE $t');
@@ -285,7 +284,8 @@ class HousekeepingBackup {
       final ordered = tables.keys.toList()
         ..sort(
           (a, b) =>
-              (_children.contains(a) ? 1 : 0) - (_children.contains(b) ? 1 : 0),
+              (childTables.contains(a) ? 1 : 0) -
+              (childTables.contains(b) ? 1 : 0),
         );
       for (final name in ordered) {
         await tx.execute(tables[name]['sql'] as String);
@@ -309,13 +309,7 @@ class HousekeepingBackup {
       // are not sent. The confirmed version starts again from the restored
       // data and the server's list is read from the start (the actions
       // already in the backup change nothing).
-      await tx.delete('housekeeping_sync_outbox');
-      await tx.delete('housekeeping_sync_conflicts');
-      await tx.delete('housekeeping_sync_base');
-      await tx.insert('housekeeping_sync_state', {
-        'key': 'last_seq',
-        'value': '0',
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      await HousekeepingStore.resetSync(tx);
     });
     // The restored data is the new starting point of the sync.
     await store.ensureSyncBase(0, onlyWhenSyncing: true);

@@ -238,11 +238,18 @@ void main() {
       'Lancement de l’application',
       () async {
         await wait(1500);
+        // The account login comes first (user_management); the demo team
+        // is behind "Comptes de test".
+        check(
+          find.text('Comptes de test').evaluate().isNotEmpty,
+          '« Comptes de test » absent de l’écran de connexion',
+        );
+        await tapText('Comptes de test');
         check(
           find.text('Amina').evaluate().isNotEmpty,
           'Amina absente de la liste',
         );
-        return 'Les comptes de test sont proposés';
+        return 'Connexion par compte ; les comptes de test sont proposés';
       },
     );
     await step(
