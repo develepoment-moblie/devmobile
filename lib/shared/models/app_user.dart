@@ -15,6 +15,7 @@ class AppUser {
 
 // Shared role names. Changing this list needs the whole team's agreement.
 abstract final class AppRole {
+  static const kitchen = 'kitchen';
   static const guest = 'guest';
   static const receptionist = 'receptionist';
   static const staff = 'staff';
@@ -24,6 +25,7 @@ abstract final class AppRole {
   static const admin = 'admin';
 
   static const labels = {
+    kitchen: 'Cuisine',
     guest: 'Client',
     receptionist: 'Réceptionniste',
     staff: 'Agent d’étage',
@@ -33,6 +35,7 @@ abstract final class AppRole {
     admin: 'Administrateur',
   };
   static const all = {
+    kitchen,
     guest,
     receptionist,
     staff,
