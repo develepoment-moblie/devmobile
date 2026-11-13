@@ -581,7 +581,8 @@ class HousekeepingSync extends ChangeNotifier {
 
   /// No server set: connects by itself to the Nova Paris server found on
   /// the Wi-Fi, when there is exactly one (announcements heard during
-  /// [listen], and the scan). True once connected. Not after "Arrêter".
+  /// [listen], and the scan), and it is empty or holds a copy of the data.
+  /// True once connected. Not after "Arrêter".
   Future<bool> autoConnect({
     Duration listen = const Duration(seconds: 4),
   }) async {
@@ -605,9 +606,24 @@ class HousekeepingSync extends ChangeNotifier {
       if (left > Duration.zero) await Future<void>.delayed(left);
       await heard.cancel();
       if (found.length != 1 || _disposed) return false;
-      await useFoundServer(found.values.single);
+      final server = found.values.single;
+      // A server with a history but no copy of the data yet: joining now
+      // would keep this phone's own, different data. Wait for a phone to
+      // send the copy (next try in 30 s).
+      if (server.id != view.serverId) {
+        final health = await _getJson(
+          server.address.replace(path: '/v1/health'),
+        );
+        final history = health['lastSeq'];
+        if (history is int && history > 0 && health['snapshotSeq'] == null) {
+          return false;
+        }
+      }
+      await useFoundServer(server);
       return true;
     } on AppServiceException {
+      return false;
+    } on _Unreachable {
       return false;
     } finally {
       await heard.cancel();
