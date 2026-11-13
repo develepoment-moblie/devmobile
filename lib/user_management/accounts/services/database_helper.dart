@@ -23,7 +23,8 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 7, // 7: passwords and security answers hashed
+      version:
+          8, // 7: passwords and security answers hashed; 8: firebase_linked
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -40,7 +41,8 @@ class DatabaseHelper {
       role TEXT NOT NULL,
       points INTEGER NOT NULL DEFAULT 0,
       security_question TEXT,
-      security_answer TEXT
+      security_answer TEXT,
+      firebase_linked INTEGER NOT NULL DEFAULT 0
     )
     ''');
 
@@ -160,25 +162,25 @@ class DatabaseHelper {
         );
       }
     }
+    // v7 → v8: accounts whose Firebase twin is known. Firebase then decides
+    // their password while online, so a reset by e-mail takes effect.
+    if (oldVersion < 8) {
+      await db.execute(
+        'ALTER TABLE users ADD COLUMN firebase_linked INTEGER NOT NULL DEFAULT 0',
+      );
+    }
   }
 
   // ==================================================
   // ============  USERS  =============================
   // ==================================================
 
-  Future<AppUser?> login(String fullName, String password) async {
-    final db = await instance.database;
-    final results = await db.query(
-      'users',
-      where: 'full_name = ?',
-      whereArgs: [fullName],
-      limit: 1,
-    );
-    if (results.isEmpty) return null;
-    final stored = results.first['password'] as String?;
-    return verifySecret(password, stored)
-        ? AppUser.fromMap(results.first)
-        : null;
+  Future<AppUser?> login(String email, String password) async {
+    final row = await getUserByEmail(email);
+    if (row == null || !verifySecret(password, row['password'] as String?)) {
+      return null;
+    }
+    return AppUser.fromMap(row);
   }
 
   Future<int> insertUser(
@@ -188,8 +190,9 @@ class DatabaseHelper {
     String? securityAnswer,
   }) async {
     final db = await instance.database;
-    return await db.insert('users', {
-      'full_name': user.fullName,
+    final email = user.fullName.trim().toLowerCase();
+    final values = {
+      'full_name': email,
       'display_name': user.displayName,
       'password': hashSecret(password),
       'role': user.role,
@@ -198,6 +201,17 @@ class DatabaseHelper {
       'security_answer': securityAnswer == null || securityAnswer.trim().isEmpty
           ? null
           : hashSecret(securityAnswer.trim().toLowerCase()),
+    };
+    return db.transaction((tx) async {
+      final existing = await tx.query(
+        'users',
+        columns: ['id'],
+        where: 'LOWER(TRIM(full_name)) = ?',
+        whereArgs: [email],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) throw StateError('Cet e-mail est déjà utilisé.');
+      return tx.insert('users', values);
     });
   }
 
@@ -222,14 +236,19 @@ class DatabaseHelper {
   // ===== PASSWORD RESET SUPPORT =====
 
   Future<Map<String, dynamic>?> getUserByEmail(String email) async {
+    final input = email.trim();
     final db = await instance.database;
     final results = await db.query(
       'users',
-      where: 'full_name = ?',
-      whereArgs: [email.trim()],
-      limit: 1,
+      where: 'LOWER(TRIM(full_name)) = ?',
+      whereArgs: [input.toLowerCase()],
     );
-    return results.isEmpty ? null : results.first;
+    if (results.length == 1) return results.single;
+    // Older databases could contain separate accounts that differed in case.
+    for (final row in results) {
+      if (row['full_name'] == input) return row;
+    }
+    return null;
   }
 
   Future<bool> verifySecurityAnswer(String email, String answer) async {
@@ -242,12 +261,14 @@ class DatabaseHelper {
   }
 
   Future<int> resetPassword(String email, String newPassword) async {
+    final user = await getUserByEmail(email);
+    if (user == null) return 0;
     final db = await instance.database;
     return await db.update(
       'users',
       {'password': hashSecret(newPassword)},
-      where: 'full_name = ?',
-      whereArgs: [email.trim()],
+      where: 'id = ?',
+      whereArgs: [user['id']],
     );
   }
 
@@ -276,6 +297,28 @@ class DatabaseHelper {
     return await db.update(
       'users',
       {'points': points},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Saves a password Firebase accepted, so it also works offline, and
+  /// remembers that this account has a Firebase twin.
+  Future<void> saveFirebasePassword(int id, String password) async {
+    final db = await instance.database;
+    await db.update(
+      'users',
+      {'password': hashSecret(password), 'firebase_linked': 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> markFirebaseLinked(int id) async {
+    final db = await instance.database;
+    await db.update(
+      'users',
+      {'firebase_linked': 1},
       where: 'id = ?',
       whereArgs: [id],
     );

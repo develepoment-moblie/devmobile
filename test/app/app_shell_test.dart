@@ -56,16 +56,18 @@ void main() {
         final source = file.readAsStringSync();
         for (final other in ids.difference({id})) {
           expect(
-            RegExp("import '(package:nova_paris/|(\\.\\./)+)$other/")
-                .hasMatch(source),
+            RegExp(
+              "import '(package:nova_paris/|(\\.\\./)+)$other/",
+            ).hasMatch(source),
             isFalse,
             reason:
                 '${file.path} imports lib/$other. Use shared/ or AppEvents.',
           );
         }
         expect(
-          RegExp(r"import '(package:nova_paris/|(\.\./)+)app/")
-              .hasMatch(source),
+          RegExp(
+            r"import '(package:nova_paris/|(\.\./)+)app/",
+          ).hasMatch(source),
           isFalse,
           reason:
               '${file.path} imports lib/app. Modules receive AppSession instead.',
@@ -105,9 +107,13 @@ void main() {
     expect(find.text('Utilisateurs'), findsNothing);
 
     await tester.tap(find.text('Maintenance'));
+    await tester.pump();
+    await tester.runAsync(
+      () => session.database.database.query('maintenance_interventions'),
+    );
     await tester.pumpAndSettle();
-    expect(find.text('Module en construction'), findsOneWidget);
-    await tester.tap(find.byType(BackButton));
+    expect(find.text('Interventions en cours'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.chevron_left_rounded));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byTooltip('Mon profil'));
@@ -116,6 +122,63 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Comptes de test'), findsOneWidget);
   });
+
+  testWidgets(
+    'guest services shortcuts match the role and open the chosen service',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final module = novaModules.singleWhere(
+        (module) => module.id == 'guest_services',
+      );
+
+      Future<void> openAs(String role) async {
+        session.signIn(AppUser(id: role, fullName: 'Test', role: role));
+        await tester.pumpWidget(
+          MaterialApp(
+            key: ValueKey(role),
+            home: Builder(
+              builder: (context) => module.buildHome(context, session),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await openAs(AppRole.guest);
+      expect(find.text('Room service'), findsOneWidget);
+      expect(find.text('Chambres des clients'), findsNothing);
+      expect(find.text('Créneaux du spa'), findsNothing);
+      await tester.tap(find.text('Spa'));
+      await tester.pump();
+      await tester.runAsync(
+        () => session.database.database.query('guest_services_records'),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Spa'))
+            .selected,
+        isTrue,
+      );
+
+      await openAs(AppRole.kitchen);
+      expect(find.text('Commandes cuisine'), findsOneWidget);
+      expect(find.text('Stock'), findsOneWidget);
+      expect(find.text('Restaurant'), findsNothing);
+
+      await openAs(AppRole.receptionist);
+      expect(find.text('Commandes'), findsOneWidget);
+      expect(find.text('Chambres des clients'), findsOneWidget);
+      expect(find.text('Créneaux du spa'), findsNothing);
+
+      await openAs(AppRole.admin);
+      await tester.scrollUntilVisible(find.text('Créneaux du spa'), 180);
+      expect(find.text('Carte'), findsOneWidget);
+      expect(find.text('Créneaux du spa'), findsOneWidget);
+    },
+  );
 
   testWidgets('each role sees exactly the modules that declare it', (
     tester,

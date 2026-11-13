@@ -1,0 +1,145 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:nova_paris/housekeeping/screens/sync_screen.dart';
+import 'package:nova_paris/housekeeping/services/housekeeping_store.dart';
+import 'package:nova_paris/housekeeping/services/housekeeping_sync.dart';
+import 'package:nova_paris/shared/custom/app_theme.dart';
+import 'package:nova_paris/shared/services/app_database.dart';
+import 'package:nova_paris/shared/services/app_session.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'housekeeping_store_test.dart' show TestStaff;
+import 'sync_test.dart' show FakeHotelServer;
+import 'test_backends.dart';
+
+// The Synchronisation screen on a real database, with an in-memory server.
+void main() {
+  late Directory directory;
+  late AppSession session;
+  late HousekeepingStore store;
+  late HousekeepingSync sync;
+  late FakeHotelServer server;
+  setUpAll(sqfliteFfiInit);
+  setUp(() async {
+    directory = await Directory.systemTemp.createTemp('nova_sync_screen_');
+    final database = await AppDatabase.open(
+      schemas: [housekeepingSchema],
+      factory: databaseFactoryFfi,
+      path: p.join(directory.path, 'test.db'),
+    );
+    session = AppSession(database: database, staff: TestStaff())
+      ..signIn(TestStaff.people.firstWhere((u) => u.id == 'amina'));
+    store = HousekeepingStore(session);
+    server = FakeHotelServer();
+    sync = HousekeepingSync(
+      store,
+      client: server.client,
+      background: false,
+      timeout: const Duration(milliseconds: 200),
+    );
+  });
+  tearDown(() async {
+    sync.dispose();
+    await session.database.close();
+    await directory.delete(recursive: true);
+  });
+
+  // SQLite runs outside the widget test clock: wait for [finder].
+  Future<void> settleUntil(WidgetTester tester, Finder finder) async {
+    for (var i = 0; i < 80 && finder.evaluate().isEmpty; i++) {
+      await tester.runAsync(
+        () => Future.delayed(const Duration(milliseconds: 30)),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(finder, findsWidgets);
+  }
+
+  Future<void> open(WidgetTester tester) async {
+    tester.view.physicalSize = const Size(430, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: novaTheme(),
+        home: SyncScreen(sync: sync),
+      ),
+    );
+    await settleUntil(tester, find.text('Adresse du serveur'));
+    addTearDown(() => tester.pumpWidget(const SizedBox()));
+  }
+
+  testWidgets('set the server, test it, sync and clear a conflict', (
+    tester,
+  ) async {
+    await open(tester);
+    expect(find.text('État'), findsNothing, reason: 'no server yet');
+
+    await tester.enterText(find.byType(TextField), '8.8.8.8');
+    await tester.tap(find.text('Enregistrer'));
+    await settleUntil(tester, find.textContaining('réseau local'));
+
+    await tester.enterText(find.byType(TextField), '192.168.1.20');
+    await tester.tap(find.text('Tester la connexion'));
+    await settleUntil(
+      tester,
+      find.text('Serveur joignable · 0 action enregistrée.'),
+    );
+
+    await tester.tap(find.text('Enregistrer'));
+    // Saved once the confirmed version of the sync exists.
+    await settleUntil(tester, find.text('Serveur enregistré'));
+    expect(find.text('État'), findsOneWidget);
+    expect(find.text('Aucune action en attente'), findsOneWidget);
+    expect(find.text('Jamais synchronisé'), findsOneWidget);
+    expect(find.text('Aucun conflit'), findsOneWidget);
+
+    // Another phone's agent tried to create stock: refused here.
+    server.inject('/v1/supplies/new/create', 'sarah', {
+      'name': 'Faux article',
+      'unit': 'u',
+      'quantity': 1,
+      'minimum': 0,
+      'category': 'linge',
+    });
+    await tester.tap(find.text('Synchroniser'));
+    await settleUntil(tester, find.text('Stock · création'));
+    expect(find.text('Conflits · 1'), findsOneWidget);
+    expect(find.text('Actions d’autres téléphones refusées'), findsOneWidget);
+    expect(find.text('Vos actions refusées'), findsNothing);
+    expect(
+      find.textContaining('Stock réservé à la gouvernante.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Dernière synchronisation'), findsOneWidget);
+
+    await tester.tap(
+      find.byTooltip('Retirer « Stock · création » de la liste'),
+    );
+    await settleUntil(tester, find.text('Aucun conflit'));
+  });
+
+  testWidgets('offline: the badge counts the actions waiting', (tester) async {
+    await tester.runAsync(() async {
+      await sync.setServer('192.168.1.20');
+      server.online = false;
+      final rules = TestHousekeeping(store);
+      final room = ((await store.readState())['rooms'] as List).firstWhere(
+        (r) => r['number'] == '305',
+      );
+      await rules.mutate('/v1/rooms/305/assign', {
+        'version': room['version'],
+        'employeeId': 'sarah',
+        'note': '',
+        'urgent': false,
+      });
+    });
+    await open(tester);
+    await tester.tap(find.text('Synchroniser'));
+    await settleUntil(tester, find.text('Hors ligne · 1 action en attente'));
+    expect(find.textContaining('Serveur injoignable'), findsWidgets);
+  });
+}

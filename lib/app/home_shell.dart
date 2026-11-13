@@ -174,17 +174,35 @@ class HomeShell extends StatelessWidget {
             ),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-            sliver: SliverList.separated(
-              itemCount: visible.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 12),
-              itemBuilder: (context, i) => FadeSlideIn(
-                index: i + 1,
-                child: _ModuleCard(
-                  module: visible[i].$1,
-                  tint: visible[i].$2,
-                  session: session,
-                ),
-              ),
+            sliver: SliverLayoutBuilder(
+              builder: (context, constraints) {
+                final width = constraints.crossAxisExtent;
+                final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+                final columns = width < 300 || scale > 1.5
+                    ? 1
+                    : width >= 1000
+                    ? 4
+                    : width >= 650
+                    ? 3
+                    : 2;
+                return SliverGrid.builder(
+                  itemCount: visible.length,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: columns,
+                    crossAxisSpacing: 14,
+                    mainAxisSpacing: 14,
+                    mainAxisExtent: 240 + (scale - 1).clamp(0, 3) * 160,
+                  ),
+                  itemBuilder: (context, i) => FadeSlideIn(
+                    index: i + 1,
+                    child: _ModuleCard(
+                      module: visible[i].$1,
+                      tint: visible[i].$2,
+                      session: session,
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ],
@@ -220,53 +238,36 @@ class _ModuleCard extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: tint.$2,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Icon(module.icon, color: tint.$1, size: 26),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    module.title,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
+            Row(
+              children: [
+                Container(
+                  width: 54,
+                  height: 54,
+                  decoration: BoxDecoration(
+                    color: tint.$2,
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    module.description,
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontSize: 12.5,
-                      height: 1.35,
-                    ),
-                  ),
-                ],
-              ),
+                  child: Icon(module.icon, color: tint.$1, size: 26),
+                ),
+                const Spacer(),
+                Icon(Icons.arrow_outward_rounded, size: 20, color: tint.$1),
+              ],
             ),
-            const SizedBox(width: 8),
-            Container(
-              width: 32,
-              height: 32,
-              decoration: const BoxDecoration(
-                color: AppColors.background,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.arrow_forward_rounded,
-                size: 18,
-                color: AppColors.primary,
+            const SizedBox(height: 18),
+            Text(
+              module.title,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              module.description,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 12,
+                height: 1.35,
               ),
             ),
           ],

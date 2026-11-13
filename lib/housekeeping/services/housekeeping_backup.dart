@@ -27,7 +27,7 @@ class HousekeepingBackup {
   static const keepAutomatic = 7;
 
   /// Tables with a REFERENCES to another table: dropped first.
-  static const _children = {
+  static const childTables = <String>{
     'housekeeping_notification_reads',
     'housekeeping_inspection_items',
     'housekeeping_issue_photos',
@@ -35,6 +35,13 @@ class HousekeepingBackup {
     'housekeeping_laundry_lines',
     'housekeeping_supply_request_lines',
   };
+
+  /// The housekeeping tables a backup holds. The sync tables (server
+  /// address, this phone's id, outbox) belong to the phone: a backup leaves
+  /// them out and a restore keeps them.
+  static const moduleTables =
+      "type = 'table' AND name LIKE 'housekeeping\\_%' ESCAPE '\\' "
+      "AND name NOT LIKE 'housekeeping\\_sync\\_%' ESCAPE '\\'";
 
   final HousekeepingStore store;
   final Future<Directory> Function() _appFolder;
@@ -88,7 +95,7 @@ class HousekeepingBackup {
       for (final t in await db.query(
         'sqlite_master',
         columns: ['name', 'sql'],
-        where: "type = 'table' AND name LIKE 'housekeeping\\_%' ESCAPE '\\'",
+        where: moduleTables,
         orderBy: 'name',
       )) {
         tables[t['name'] as String] = {
@@ -262,14 +269,13 @@ class HousekeepingBackup {
             for (final t in await tx.query(
               'sqlite_master',
               columns: ['name'],
-              where:
-                  "type = 'table' AND name LIKE 'housekeeping\\_%' ESCAPE '\\'",
+              where: moduleTables,
             ))
               t['name'] as String,
           ]..sort(
             (a, b) =>
-                (_children.contains(a) ? 0 : 1) -
-                (_children.contains(b) ? 0 : 1),
+                (childTables.contains(a) ? 0 : 1) -
+                (childTables.contains(b) ? 0 : 1),
           );
       for (final t in current) {
         await tx.execute('DROP TABLE $t');
@@ -278,7 +284,8 @@ class HousekeepingBackup {
       final ordered = tables.keys.toList()
         ..sort(
           (a, b) =>
-              (_children.contains(a) ? 1 : 0) - (_children.contains(b) ? 1 : 0),
+              (childTables.contains(a) ? 1 : 0) -
+              (childTables.contains(b) ? 1 : 0),
         );
       for (final name in ordered) {
         await tx.execute(tables[name]['sql'] as String);
@@ -298,7 +305,14 @@ class HousekeepingBackup {
           housekeepingSchema.version,
         );
       }
+      // Sync: actions made after the backup are gone with the data, so they
+      // are not sent. The confirmed version starts again from the restored
+      // data and the server's list is read from the start (the actions
+      // already in the backup change nothing).
+      await HousekeepingStore.resetSync(tx);
     });
+    // The restored data is the new starting point of the sync.
+    await store.ensureSyncBase(0, onlyWhenSyncing: true);
     final base = (await _appFolder()).path;
     for (final e in (backup['files'] as Map? ?? {}).entries) {
       final relative = e.key as String;

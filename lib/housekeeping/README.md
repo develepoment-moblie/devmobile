@@ -115,6 +115,108 @@ l’application (paquets `record`, `audioplayers`, `path_provider`, permission
 `RECORD_AUDIO`) ; SQLite ne garde que ce chemin relatif. Une note enregistrée
 puis abandonnée est supprimée du téléphone.
 
+## Synchronisation avec le serveur de l’hôtel
+
+Plusieurs téléphones partagent leur travail par un service web REST
+(`server/` à la racine du dépôt, voir `server/README.md`). Hors ligne
+d’abord : chaque action est enregistrée sur le téléphone, puis envoyée.
+
+- **File d’envoi** : une action nouvelle est mise dans
+  `housekeeping_sync_outbox` dans la même transaction que l’action elle-même
+  (`services/sync_outbox.dart`) ; une action refusée ne laisse rien.
+- **L’ordre du serveur décide** (`services/sync_rebase.dart`). Chaque
+  téléphone garde deux versions des données :
+  - la **version confirmée** (`housekeeping_sync_base`) : toutes les actions
+    numérotées par le serveur, appliquées dans son ordre par les mêmes
+    règles, au nom de leur auteur (rôle relu dans `session.staff`, droits,
+    propriété, version). Identique sur tous les téléphones ;
+  - **ce que montrent les écrans** : la version confirmée plus les actions de
+    ce téléphone pas encore numérotées, appliquées à nouveau par-dessus.
+- **Synchroniser** (`services/housekeeping_sync.dart`) : `POST /v1/sync/push`
+  (la file ; une action envoyée y reste, « envoyée », jusqu’à sa
+  confirmation), puis `GET /v1/sync/pull` (toutes les actions numérotées, y
+  compris celles de ce téléphone) et reconstruction en une transaction.
+- **Mêmes identifiants partout** : pendant une action, les identifiants créés
+  et l’heure viennent de la modification (`inMutation` dans
+  `mutation_meta.dart`) ; rejouée ailleurs, elle crée les mêmes lignes.
+- **Sans doublon** : un `mutationId` déjà appliqué ne change rien, sur le
+  téléphone comme sur le serveur ; réessayer est donc sans risque.
+- **Conflits** : une action que les règles refusent dans l’ordre du serveur
+  (par exemple une version dépassée, 409) est refusée sur tous les
+  téléphones. Celle de ce téléphone disparaît de ses écrans et s’affiche dans
+  « Vos actions refusées » ; celle d’un autre dans « Actions d’autres
+  téléphones refusées » (`housekeeping_sync_conflicts`).
+- **Règles locales** : les événements des autres modules, l’archivage des
+  objets trouvés et l’alerte de retard s’appliquent aux deux versions, dans
+  la même transaction (`HousekeepingStore.localChange`), pour qu’une
+  reconstruction ne les perde pas.
+- **Quand** : au démarrage, 2 s après chaque modification, toutes les 20 s,
+  et sur « Synchroniser ». Sans réseau : nouvel essai après 5 s, 10 s, 20 s…
+  jusqu’à 5 min.
+- **Écran** « Synchronisation » (gouvernante et Manager) : adresse du serveur,
+  « Tester la connexion », actions en attente, dernière synchronisation,
+  conflits. Pastille « Synchronisé / Hors ligne · n actions en attente » sous
+  l’en-tête pour tous.
+- **Adresse** : HTTP seulement pour une adresse du réseau local (10.x,
+  172.16-31.x, 192.168.x, localhost), sinon HTTPS.
+- **Sauvegardes** : les tables `housekeeping_sync_*` appartiennent au
+  téléphone ; une sauvegarde ne les contient pas. Une restauration vide la
+  file ; les données restaurées deviennent la version confirmée et la liste
+  du serveur est relue depuis le début (les actions déjà présentes ne
+  changent rien).
+
+Limites : les fichiers des notes vocales ne sont pas envoyés (seul leur
+chemin) ; les photos voyagent dans l’action. Les événements des autres
+modules (arrivées, départs, maintenance) restent propres à chaque téléphone.
+Le serveur ne vérifie pas qui envoie (réseau de l’hôtel supposé fermé). Les
+téléphones doivent partir des mêmes données (nouvelle installation ou même
+sauvegarde restaurée).
+
+## API publiques
+
+Trois services web gratuits, sans clé, en HTTPS. Sans Internet, l’application
+fonctionne comme avant (saisie à la main, description d’origine).
+
+- **Open Food Facts** (`services/product_lookup.dart`) : dans « Carte du
+  minibar » → « Nouvel article », « Scanner le code-barres » ouvre la caméra
+  (`screens/barcode_scan_screen.dart`, EAN-13, EAN-8, UPC) ; l’API remplit
+  le nom et la contenance (« Coca-Cola 330 ml ») et montre la photo du
+  produit. Le Manager ajoute le prix et le stock puis enregistre comme
+  d’habitude. Seul le code-barres quitte le téléphone.
+  `GET https://world.openfoodfacts.org/api/v2/product/<code>.json`
+- **Open Beauty Facts** (même service, même API) : dans l’onglet Stock →
+  « Nouvel article », « Scanner le code-barres » cherche d’abord dans Open
+  Beauty Facts (gel douche, shampooing, savon) : le nom est rempli et le type
+  passe à « Produits d’accueil » (unité « flacons »). Inconnu là, Open Food
+  Facts est interrogé : une boisson devient un article « Minibar ». Le linge
+  et les produits d’entretien restent saisis à la main.
+  `GET https://world.openbeautyfacts.org/api/v2/product/<code>.json`
+- **MyMemory** (`services/report_translation.dart`) : sur un signalement,
+  « Traduire en français » affiche la traduction sous la description
+  d’origine, avec la langue détectée (« anglais → français »). Rien n’est
+  enregistré ; seul le texte du signalement est envoyé. Quota gratuit
+  d’environ 5 000 mots par jour ; un texte de plus de 500 octets est envoyé
+  en morceaux.
+  `GET https://api.mymemory.translated.net/get?q=…&langpair=autodetect|fr`
+
+## Hôtel de démonstration (présentation)
+
+`flutter build apk --release --dart-define=HOUSEKEEPING_SAMPLE_DATA=false --dart-define=HOUSEKEEPING_DEMO_DATA=true`
+: au démarrage, si l’hôtel n’a aucune chambre, le module le remplit une fois
+(`services/demo_hotel.dart`, environ 40 s sur le téléphone), par les mêmes
+règles que les écrans, au nom de chaque personne de l’équipe de démo (la
+personne connectée sur le téléphone n’est pas touchée ; les écrans se mettent
+à jour au fur et à mesure). Un remplissage interrompu est refait au
+lancement suivant (repère dans `housekeeping_sync_state`) ; rien n’est mis en
+file pour le serveur, et un téléphone réglé sur un serveur n’est pas rempli.
+La journée en cours se place dans les heures qui précèdent le remplissage.
+Contenu : 26 chambres sur 4 étages, cinq jours de nettoyages
+avec photos et inspections, et la journée en cours dans tous les états
+(à valider, en cours, en pause, à faire, non attribuée, hors service),
+signalements (dont un en anglais et un en arabe pour la traduction), objets
+trouvés, demandes de produits, blanchisserie, minibar. Équipe de démo :
+Manager Démo, Amina (gouvernante), Sarah, Lina, Youssef (« Comptes de test »).
+
 ## Structure
 
 ```text
@@ -137,11 +239,18 @@ services/
   notification_rules.dart       catégories de notifications, retards
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
+  housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
+  http_guard.dart               appels web : délai, absence de réseau, réponse JSON
+  demo_hotel.dart               hôtel de démonstration (option de compilation)
+  product_lookup.dart           fiche produit depuis un code-barres (Open Beauty / Food Facts)
+  report_translation.dart       traduction des signalements en français (MyMemory)
+  sync_rebase.dart              reconstruction dans l’ordre du serveur (version confirmée)
+  sync_outbox.dart              file d’envoi remplie dans la transaction de l’action
   voice_notes.dart              enregistrement et lecture des notes vocales
   evidence_photo.dart           photos JPEG normalisées (1280 px, 600 Ko, sans EXIF)
 ```
 
-Tables (version 7) : `housekeeping_rooms`, `housekeeping_photos`,
+Tables (version 9) : `housekeeping_rooms`, `housekeeping_photos`,
 `housekeeping_supplies`, `housekeeping_notifications`,
 `housekeeping_notification_reads`, `housekeeping_cleanings` (journal des
 nettoyages : durée, score d’inspection), `housekeeping_timer_segments`,
@@ -156,5 +265,7 @@ objets trouvés), `housekeeping_settings` (délai d’archivage),
 `housekeeping_laundry_batches`, `housekeeping_laundry_lines`,
 `housekeeping_supply_requests`, `housekeeping_supply_request_lines`,
 `housekeeping_minibar_consumptions`, `housekeeping_stays`,
-`housekeeping_notification_prefs`.
+`housekeeping_notification_prefs`, `housekeeping_sync_outbox`,
+`housekeeping_sync_state`, `housekeeping_sync_conflicts`,
+`housekeeping_sync_base` (synchronisation).
 Une nouvelle installation reçoit des chambres et un stock fictifs.

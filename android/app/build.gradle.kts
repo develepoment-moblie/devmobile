@@ -1,4 +1,5 @@
 import java.util.Properties
+import groovy.json.JsonSlurper
 
 // Google Maps key (user_management map screen): kept out of git, in
 // android/local.properties as MAPS_API_KEY=...
@@ -12,6 +13,13 @@ plugins {
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+val stayingConfig = rootProject.file("../.staying.local.json")
+val stayingDebugKey = providers.fileContents(layout.file(providers.provider { stayingConfig }))
+    .asText.map { json ->
+        val config = JsonSlurper().parseText(json) as? Map<*, *>
+        (config?.get("STAYING_API_KEY") as? String)?.trim().orEmpty()
+    }.orElse("")
 
 android {
     namespace = "com.novaparis.nova_paris"
@@ -39,9 +47,13 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         manifestPlaceholders["MAPS_API_KEY"] = localProperties.getProperty("MAPS_API_KEY", "")
+        manifestPlaceholders["STAYING_DEBUG_KEY"] = ""
     }
 
     buildTypes {
+        debug {
+            manifestPlaceholders["STAYING_DEBUG_KEY"] = stayingDebugKey.get()
+        }
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.

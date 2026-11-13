@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import '../../shared/custom/app_widgets.dart';
+import '../models/kitchen_plan.dart';
 import '../models/room_service.dart';
 import '../services/guest_service_store.dart';
 import 'kitchen_stock_screen.dart';
@@ -18,6 +20,21 @@ class KitchenOrdersScreen extends StatefulWidget {
 class _KitchenOrdersScreenState extends State<KitchenOrdersScreen> {
   late var orders = widget.store.kitchenOrders();
   bool busy = false;
+  Timer? clock;
+
+  @override
+  void initState() {
+    super.initState();
+    clock = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted && !busy) refresh();
+    });
+  }
+
+  @override
+  void dispose() {
+    clock?.cancel();
+    super.dispose();
+  }
 
   void refresh() {
     setState(() {
@@ -25,13 +42,18 @@ class _KitchenOrdersScreenState extends State<KitchenOrdersScreen> {
     });
   }
 
-  Future<void> ready(int id) async {
+  Future<void> updateOrder(int id, {required bool start}) async {
     if (busy) return;
     setState(() => busy = true);
     String message;
     try {
-      await widget.store.markOrderReady(id);
-      message = 'Commande prête à livrer.';
+      if (start) {
+        await widget.store.startPreparation(id);
+        message = 'Préparation démarrée.';
+      } else {
+        await widget.store.markOrderReady(id);
+        message = 'Commande prête à livrer.';
+      }
     } on StateError catch (e) {
       message = e.message;
     } catch (_) {
@@ -89,11 +111,24 @@ class _KitchenOrdersScreenState extends State<KitchenOrdersScreen> {
             'Les commandes acceptées par la réception apparaîtront ici.',
           );
         }
+        final plan = planKitchen(rows, DateTime.now());
         return ListView.builder(
           padding: const EdgeInsets.all(20),
-          itemCount: rows.length,
+          itemCount: plan.length + 1,
           itemBuilder: (context, index) {
-            final row = rows[index];
+            if (index == 0) {
+              return const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'Plan de préparation · une commande à la fois. Les heures sont indicatives et se recalculent avec la file.',
+                ),
+              );
+            }
+            final entry = plan[index - 1];
+            final row = entry.order;
+            final eta = entry.expectedReadyAt;
+            final target = entry.readyTarget;
+            final atRisk = eta != null && target != null && eta.isAfter(target);
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
               child: Padding(
@@ -111,6 +146,34 @@ class _KitchenOrdersScreenState extends State<KitchenOrdersScreen> {
                         orderStatusLabels[row['status']] ?? '${row['status']}',
                       ),
                     ),
+                    if (entry.queuePosition != null) ...[
+                      Text(
+                        entry.startedAt != null
+                            ? 'Préparation démarrée'
+                            : entry.queuePosition == 1
+                            ? 'À lancer en priorité'
+                            : 'Position ${entry.queuePosition} dans la file',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      if (entry.preparationMinutes != null)
+                        Text(
+                          '${entry.preparationMinutes} min de préparation estimées',
+                        ),
+                      if (eta != null)
+                        Text(
+                          'Prête vers ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(eta.toLocal()))}${atRisk ? ' · objectif dépassé selon le plan' : ''}',
+                        )
+                      else if (entry.estimateExceeded)
+                        const Text(
+                          'Durée estimée dépassée · heure de fin à confirmer',
+                        )
+                      else if (entry.preparationMinutes == null)
+                        const Text('Durée inconnue pour cette commande')
+                      else
+                        const Text(
+                          'Heure de fin à confirmer après la commande précédente',
+                        ),
+                    ],
                     for (final line
                         in jsonDecode(row['lines'] as String) as List)
                       Padding(
@@ -121,9 +184,30 @@ class _KitchenOrdersScreenState extends State<KitchenOrdersScreen> {
                       ),
                     if (row['status'] != 'ready') ...[
                       const SizedBox(height: 8),
-                      FilledButton(
-                        onPressed: busy ? null : () => ready(row['id'] as int),
-                        child: const Text('Marquer prête à livrer'),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          if (entry.canStart)
+                            FilledButton(
+                              onPressed: busy
+                                  ? null
+                                  : () => updateOrder(
+                                      row['id'] as int,
+                                      start: true,
+                                    ),
+                              child: const Text('Démarrer la préparation'),
+                            ),
+                          OutlinedButton(
+                            onPressed: busy
+                                ? null
+                                : () => updateOrder(
+                                    row['id'] as int,
+                                    start: false,
+                                  ),
+                            child: const Text('Marquer prête à livrer'),
+                          ),
+                        ],
                       ),
                     ],
                   ],

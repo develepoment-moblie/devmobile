@@ -102,7 +102,65 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
-  testWidgets('manager can create a restaurant slot from an empty catalogue', (
+  testWidgets('client picks a suitable table from the floor plan', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final store = ServiceDeskStore(session);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: novaTheme(),
+        home: ServiceDeskScreen(session: session),
+      ),
+    );
+    await settle(tester);
+    await tester.tap(find.text('Restaurant'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Réserver une table'));
+    await settle(tester);
+    expect(find.widgetWithText(TextFormField, 'Objet'), findsNothing);
+    await tester.tap(find.text('Choisir la date et l’heure'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Nombre de personnes'),
+      '3',
+    );
+    final choose = find.text('Choisir une table sur le plan');
+    await tester.ensureVisible(choose);
+    await tester.pumpAndSettle();
+    await tester.tap(choose);
+    await settle(tester);
+    expect(find.text('Trop petite'), findsOneWidget);
+    await tester.tap(find.text('Suggérer une table pour 3'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Table 102 · 4 places · Suggérée'), findsOneWidget);
+    await tester.tap(find.text('101'));
+    await tester.pumpAndSettle();
+    expect(find.text('Choisir une table'), findsOneWidget);
+    await tester.tap(find.text('102'));
+    await tester.pumpAndSettle();
+    expect(find.text('Table choisie · 102'), findsOneWidget);
+    expect(find.text('Table 102 · 3 personne(s)'), findsOneWidget);
+    final save = find.text('Réserver');
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
+    await settle(tester);
+    final records = await tester.runAsync(store.records);
+    expect(records!.single['dining_table_name'], '102');
+    expect(records.single['slot_id'], isNull);
+    expect(records.single['details'], isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('manager can create a spa slot from an empty catalogue', (
     tester,
   ) async {
     session.signIn(

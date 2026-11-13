@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 0.1.0+1
 
 environment:
-  sdk: ^3.13.3
+  sdk: '>=3.12.0 <4.0.0'
 
 # Shared dependencies. Add a package only when your module needs it, and say so
 # in your pull request: pubspec.yaml is shared by the whole team.
@@ -57,6 +57,10 @@ flutter:
   assets:
     - assets/images/nova_paris_logo.png
     - assets/images/nova_paris_logo_light.png
+    - assets/images/deluxe.jpg
+    - assets/images/double.jpg
+    - assets/images/family.jpg
+    - assets/images/suite.jpg
   fonts:
     - family: Manrope
       fonts:

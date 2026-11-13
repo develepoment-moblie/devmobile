@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- housekeeping: the hotel sync server runs on a computer of the local
+     network over plain HTTP (server/). Android cannot limit cleartext to an
+     address range, so the app checks it instead: the sync accepts http://
+     only for local addresses (lib/housekeeping/services/housekeeping_sync.dart,
+     parseServerAddress); any other address must use https://. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

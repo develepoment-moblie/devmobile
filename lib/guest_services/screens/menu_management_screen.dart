@@ -267,6 +267,11 @@ class _MenuFormState extends State<_MenuForm> {
     return (double.parse(text) * 100).round();
   }
 
+  int? get preparationMinutes {
+    final value = minutes.text.trim();
+    return RegExp(r'^\d{1,3}$').hasMatch(value) ? int.parse(value) : null;
+  }
+
   Future<void> save() async {
     if (busy || !form.currentState!.validate()) return;
     setState(() => busy = true);
@@ -279,7 +284,7 @@ class _MenuFormState extends State<_MenuForm> {
           category,
           symbol.text.trim(),
           cents!,
-          int.parse(minutes.text),
+          preparationMinutes!,
           allergens.text.trim(),
           vegetarian: vegetarian,
           version: widget.item?.version ?? 1,
@@ -287,6 +292,8 @@ class _MenuFormState extends State<_MenuForm> {
         create: widget.item == null,
       );
       if (mounted) Navigator.pop(context, true);
+    } on StateError catch (error) {
+      if (mounted) showFeedback(context, error.message);
     } catch (_) {
       if (mounted) {
         showFeedback(
@@ -308,6 +315,7 @@ class _MenuFormState extends State<_MenuForm> {
     ),
     body: Form(
       key: form,
+      autovalidateMode: AutovalidateMode.onUserInteraction,
       child: ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -354,10 +362,12 @@ class _MenuFormState extends State<_MenuForm> {
             decoration: const InputDecoration(
               labelText: 'Préparation en minutes',
             ),
-            validator: (v) =>
-                (int.tryParse(v!) ?? 0) < 1 || (int.tryParse(v) ?? 999) > 180
-                ? 'Entre 1 et 180 minutes'
-                : null,
+            validator: (_) {
+              final duration = preparationMinutes;
+              return duration == null || duration < 1 || duration > 180
+                  ? 'Saisissez un nombre entier de 1 à 180 minutes.'
+                  : null;
+            },
           ),
           const SizedBox(height: 16),
           TextFormField(

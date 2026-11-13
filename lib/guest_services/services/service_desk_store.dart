@@ -1,6 +1,7 @@
 import '../../shared/models/app_user.dart';
 import 'package:sqflite/sqflite.dart';
 import '../../shared/services/app_session.dart';
+import 'restaurant_confirmation.dart';
 
 const serviceKinds = <String, String>{
   'restaurant': 'Restaurant',
@@ -88,6 +89,281 @@ class ServiceDeskStore {
       id INTEGER PRIMARY KEY AUTOINCREMENT, entity TEXT NOT NULL, entity_id INTEGER NOT NULL,
       actor_id TEXT NOT NULL, action TEXT NOT NULL, created_at TEXT NOT NULL)''',
     );
+  }
+
+  static Future<void> migrateRestaurantFloor(Transaction tx) async {
+    await tx.execute(
+      'ALTER TABLE guest_services_records ADD COLUMN arrived_at TEXT',
+    );
+    await tx.execute('''CREATE TABLE guest_services_dining_tables (
+      id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      seats INTEGER NOT NULL CHECK(seats BETWEEN 1 AND 20))''');
+    await tx.execute('''CREATE TABLE guest_services_seatings (
+      id INTEGER PRIMARY KEY, table_id INTEGER NOT NULL REFERENCES guest_services_dining_tables(id),
+      record_id INTEGER NOT NULL REFERENCES guest_services_records(id),
+      seated_at TEXT NOT NULL, released_at TEXT)''');
+    await tx.execute(
+      'CREATE UNIQUE INDEX guest_services_live_table ON guest_services_seatings(table_id) WHERE released_at IS NULL',
+    );
+    await tx.execute(
+      'CREATE UNIQUE INDEX guest_services_live_party ON guest_services_seatings(record_id) WHERE released_at IS NULL',
+    );
+  }
+
+  static Future<void> migrateDiningReservations(Transaction tx) async {
+    await tx.execute(
+      'ALTER TABLE guest_services_dining_tables ADD COLUMN position INTEGER',
+    );
+    await tx.execute(
+      'UPDATE guest_services_dining_tables SET position = id - 1',
+    );
+    await tx.execute(
+      'CREATE UNIQUE INDEX guest_services_table_position ON guest_services_dining_tables(position)',
+    );
+    await tx.execute(
+      'ALTER TABLE guest_services_records ADD COLUMN dining_table_id INTEGER REFERENCES guest_services_dining_tables(id)',
+    );
+    await tx.execute(
+      'CREATE INDEX guest_services_booked_table ON guest_services_records(dining_table_id, starts_at, ends_at)',
+    );
+  }
+
+  static Future<void> migrateFixedDiningRoom(Transaction tx) async {
+    await tx.execute(
+      'ALTER TABLE guest_services_dining_tables ADD COLUMN shape TEXT',
+    );
+    await tx.execute('UPDATE guest_services_dining_tables SET position = -id');
+    const layout = [
+      (2, 'square'),
+      (4, 'circle'),
+      (2, 'square'),
+      (6, 'rectangle'),
+      (4, 'square'),
+      (8, 'rectangle'),
+      (4, 'circle'),
+      (6, 'circle'),
+      (2, 'circle'),
+    ];
+    final existingNames = {
+      for (final row in await tx.query(
+        'guest_services_dining_tables',
+        columns: ['name'],
+      ))
+        (row['name'] as String).toLowerCase(),
+    };
+    for (final (position, (seats, shape)) in layout.indexed) {
+      var name = '${101 + position}';
+      while (existingNames.contains(name.toLowerCase())) {
+        name = '$name · plan fixe';
+      }
+      await tx.insert('guest_services_dining_tables', {
+        'name': name,
+        'seats': seats,
+        'shape': shape,
+        'position': position,
+      });
+    }
+  }
+
+  Future<List<AppUser>> restaurantGuests() {
+    manager();
+    return session.staff.users(roles: {AppRole.guest});
+  }
+
+  Future<List<Map<String, Object?>>> restaurantTableChoices(
+    int slotId, {
+    int? recordId,
+  }) async {
+    actor;
+    final slots = await session.database.database.query(
+      'guest_services_slots',
+      where: "id = ? AND kind = 'restaurant' AND archived = 0",
+      whereArgs: [slotId],
+    );
+    if (slots.isEmpty) return [];
+    final slot = slots.single;
+    return restaurantTableChoicesAt(
+      DateTime.parse(slot['starts_at'] as String),
+      end: DateTime.parse(slot['ends_at'] as String),
+      recordId: recordId,
+    );
+  }
+
+  static const restaurantDuration = Duration(hours: 2);
+
+  Future<List<Map<String, Object?>>> restaurantTableChoicesAt(
+    DateTime start, {
+    DateTime? end,
+    int? recordId,
+  }) async {
+    actor;
+    if (recordId != null) {
+      await accessible(session.database.database, recordId);
+    }
+    return session.database.database.rawQuery(
+      '''
+      SELECT t.id, CAST(101 + t.position AS TEXT) AS name, t.seats, t.position, t.shape,
+        EXISTS(SELECT 1 FROM guest_services_records r
+          WHERE r.dining_table_id = t.id AND r.id != ?
+            AND r.status IN ('pending','confirmed','in_progress')
+            AND r.starts_at < ? AND r.ends_at > ?) AS reserved
+      FROM guest_services_dining_tables t
+      WHERE t.shape IS NOT NULL
+      ORDER BY t.position''',
+      [
+        recordId ?? -1,
+        (end ?? start.add(restaurantDuration)).toUtc().toIso8601String(),
+        start.toUtc().toIso8601String(),
+      ],
+    );
+  }
+
+  Future<void> checkDiningReservation(
+    Transaction tx,
+    int tableId,
+    int units,
+    Object? start,
+    Object? end,
+    Object? except,
+  ) async {
+    final tables = await tx.rawQuery(
+      '''
+      SELECT t.id FROM guest_services_dining_tables t
+      WHERE t.id = ? AND t.seats >= ? AND NOT EXISTS (
+        SELECT 1 FROM guest_services_records r
+        WHERE r.dining_table_id = t.id AND r.id != ?
+          AND r.status IN ('pending','confirmed','in_progress')
+          AND r.starts_at < ? AND r.ends_at > ?
+      )''',
+      [tableId, units, except ?? -1, end, start],
+    );
+    if (tables.isEmpty) {
+      throw StateError('Cette table ne convient plus ou est déjà réservée.');
+    }
+  }
+
+  Future<List<Map<String, Object?>>> diningTables() async {
+    staff();
+    return session.database.database.rawQuery(
+      '''
+      SELECT t.id, CASE WHEN t.shape IS NULL THEN t.name ELSE CAST(101 + t.position AS TEXT) END AS name,
+        t.seats, t.position, t.shape, s.record_id, r.guest_name, r.units, s.seated_at,
+        EXISTS(SELECT 1 FROM guest_services_records b WHERE b.dining_table_id = t.id
+          AND b.status IN ('pending','confirmed','in_progress')
+          AND b.starts_at <= ? AND b.ends_at > ?) AS reserved
+      FROM guest_services_dining_tables t
+      LEFT JOIN guest_services_seatings s ON s.table_id = t.id AND s.released_at IS NULL
+      LEFT JOIN guest_services_records r ON r.id = s.record_id
+      WHERE t.shape IS NOT NULL OR s.record_id IS NOT NULL
+      ORDER BY t.seats, t.position''',
+      [timestamp(), timestamp()],
+    );
+  }
+
+  Future<List<Map<String, Object?>>> restaurantArrivals() async {
+    staff();
+    final today = now().toLocal();
+    final start = DateTime(
+      today.year,
+      today.month,
+      today.day,
+    ).toUtc().toIso8601String();
+    final end = DateTime(
+      today.year,
+      today.month,
+      today.day + 1,
+    ).toUtc().toIso8601String();
+    return session.database.database.rawQuery(
+      '''
+      SELECT r.*, CASE WHEN t.shape IS NULL THEN t.name ELSE CAST(101 + t.position AS TEXT) END AS dining_table_name
+      FROM guest_services_records r
+      LEFT JOIN guest_services_dining_tables t ON t.id = r.dining_table_id
+      WHERE r.kind = 'restaurant' AND r.archived = 0 AND r.status = 'confirmed'
+        AND (r.arrived_at IS NOT NULL OR (r.starts_at >= ? AND r.starts_at < ?))
+      ORDER BY r.arrived_at IS NULL, r.arrived_at, r.starts_at, r.id''',
+      [start, end],
+    );
+  }
+
+  Future<void> registerRestaurantArrival(int id) async {
+    staff();
+    await session.database.database.transaction((tx) async {
+      final stamp = timestamp();
+      final changed = await tx.rawUpdate(
+        '''
+        UPDATE guest_services_records SET arrived_at = ?, updated_at = ?, version = version + 1
+        WHERE id = ? AND kind = 'restaurant' AND status = 'confirmed'
+          AND archived = 0 AND arrived_at IS NULL''',
+        [stamp, stamp, id],
+      );
+      if (changed != 1) {
+        throw StateError(
+          'Cette arrivée a déjà été traitée ou n’est pas confirmée.',
+        );
+      }
+      await audit(tx, 'record', id, 'restaurant:arrived');
+    });
+  }
+
+  Future<void> seatRestaurantParty(int id, int tableId) async {
+    staff();
+    try {
+      await session.database.database.transaction((tx) async {
+        final party = await accessible(tx, id);
+        await checkDiningReservation(
+          tx,
+          tableId,
+          party['units'] as int,
+          party['starts_at'],
+          party['ends_at'],
+          id,
+        );
+        final rows = await tx.query(
+          'guest_services_dining_tables',
+          where: 'id = ?',
+          whereArgs: [tableId],
+        );
+        if (rows.isEmpty) throw StateError('Table introuvable.');
+        final stamp = timestamp();
+        final changed = await tx.rawUpdate(
+          '''
+          UPDATE guest_services_records SET status = 'in_progress', dining_table_id = ?, updated_at = ?, version = version + 1
+          WHERE id = ? AND kind = 'restaurant' AND status = 'confirmed' AND archived = 0
+            AND arrived_at IS NOT NULL AND units <= ?''',
+          [tableId, stamp, id, rows.single['seats']],
+        );
+        if (changed != 1) {
+          throw StateError('Ce groupe ne peut pas être placé à cette table.');
+        }
+        await tx.insert('guest_services_seatings', {
+          'record_id': id,
+          'table_id': tableId,
+          'seated_at': stamp,
+        });
+        await audit(
+          tx,
+          'record',
+          id,
+          'restaurant:seated:${rows.single['name']}',
+        );
+      });
+    } on DatabaseException catch (e) {
+      if (e.isUniqueConstraintError()) {
+        throw StateError(
+          'Cette table est déjà occupée. Choisissez une autre table.',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> finishRestaurantService(int recordId) async {
+    staff();
+    final record = await accessible(session.database.database, recordId);
+    if (record['kind'] != 'restaurant') {
+      throw StateError('Réservation de restaurant introuvable.');
+    }
+    await status(record, 'completed');
   }
 
   String timestamp() => now().toUtc().toIso8601String();
@@ -258,11 +534,14 @@ class ServiceDeskStore {
 
   Future<List<Map<String, Object?>>> records({bool archived = false}) async {
     final uid = actor;
-    return session.database.database.query(
-      'guest_services_records',
-      where: 'archived = ?${isGuest ? ' AND guest_id = ?' : ''}',
-      whereArgs: [archived ? 1 : 0, if (isGuest) uid],
-      orderBy: 'id DESC',
+    return session.database.database.rawQuery(
+      '''
+      SELECT r.*, CASE WHEN t.shape IS NULL THEN t.name ELSE CAST(101 + t.position AS TEXT) END AS dining_table_name
+      FROM guest_services_records r
+      LEFT JOIN guest_services_dining_tables t ON t.id = r.dining_table_id
+      WHERE r.archived = ?${isGuest ? ' AND r.guest_id = ?' : ''}
+      ORDER BY r.id DESC''',
+      [archived ? 1 : 0, if (isGuest) uid],
     );
   }
 
@@ -272,24 +551,63 @@ class ServiceDeskStore {
     required String title,
     required String details,
     int? slotId,
+    DateTime? restaurantStart,
+    int? diningTableId,
     int units = 1,
     DateTime? dueAt,
+    String? guestId,
+    String? visitorName,
+    String? confirmationEmail,
   }) async {
-    final uid = actor;
-    if (!isGuest) {
-      throw StateError(
-        'La création de demandes est réservée au client connecté.',
-      );
+    final signedIn = actor;
+    final staffBooking = !isGuest;
+    AppUser guest = session.user!;
+    if (staffBooking) {
+      manager();
+      if (kind != 'restaurant' ||
+          previous != null ||
+          (guestId == null) == (visitorName == null)) {
+        throw StateError(
+          'Choisissez un compte client ou saisissez le nom du visiteur.',
+        );
+      }
+      if (visitorName != null) {
+        text(visitorName, 100, 'Nom du visiteur');
+      } else {
+        guest = (await restaurantGuests()).firstWhere(
+          (client) => client.id == guestId,
+          orElse: () => throw StateError('Ce compte client est indisponible.'),
+        );
+      }
+      if (session.user?.id != signedIn) {
+        throw StateError('La session a changé.');
+      }
+    } else if (guestId != null || visitorName != null) {
+      throw StateError('Réservation pour un tiers réservée à la direction.');
     }
     text(title, 100, 'Objet');
-    text(details, 2000, 'Description');
+    if (kind != 'restaurant' || details.trim().isNotEmpty) {
+      text(details, 2000, 'Description');
+    }
     if (!serviceKinds.containsKey(kind) ||
         units < 1 ||
         units > 20 ||
         (dueAt != null && !dueAt.isAfter(now()))) {
       throw StateError('Informations de demande invalides.');
     }
-    return session.database.database.transaction((tx) async {
+    final email = confirmationEmail?.trim();
+    if (email != null &&
+        email.isNotEmpty &&
+        (kind != 'restaurant' || !RestaurantConfirmation.validEmail(email))) {
+      throw StateError('Saisissez une adresse e-mail valide.');
+    }
+    final recordId = await session.database.database.transaction((tx) async {
+      final uid = visitorName == null
+          ? guest.id
+          : (await tx.rawQuery(
+                  "SELECT 'visitor:' || lower(hex(randomblob(16))) AS id",
+                )).single['id']
+                as String;
       if (previous != null) {
         final old = await accessible(tx, previous['id'] as int);
         if (old['status'] != 'pending' ||
@@ -303,7 +621,21 @@ class ServiceDeskStore {
       }
       var price = 0;
       Map<String, Object?>? booking;
-      if ({'restaurant', 'spa'}.contains(kind)) {
+      if (kind == 'restaurant' && slotId == null) {
+        if (restaurantStart == null || !restaurantStart.isAfter(now())) {
+          throw StateError('Choisissez une date et une heure à venir.');
+        }
+        booking = {
+          'name': 'Restaurant',
+          'starts_at': restaurantStart.toUtc().toIso8601String(),
+          'ends_at': restaurantStart
+              .add(restaurantDuration)
+              .toUtc()
+              .toIso8601String(),
+        };
+      } else if ({'restaurant', 'spa'}.contains(kind)) {
+        if (restaurantStart != null)
+          throw StateError('Choisissez un seul horaire.');
         if (slotId == null) throw StateError('Choisissez un créneau.');
         final slots = await tx.query(
           'guest_services_slots',
@@ -326,26 +658,59 @@ class ServiceDeskStore {
           throw StateError('Capacité insuffisante pour ce créneau.');
         }
         price = (slot['price_cents'] as int) * units;
+      } else if (slotId != null || restaurantStart != null) {
+        throw StateError('Ce service n’utilise pas de créneau.');
+      }
+      if (kind == 'restaurant') {
+        if (diningTableId != null) {
+          final fixed = await tx.query(
+            'guest_services_dining_tables',
+            columns: ['id'],
+            where: 'id = ? AND shape IS NOT NULL',
+            whereArgs: [diningTableId],
+          );
+          if (fixed.isEmpty) {
+            throw StateError('Choisissez une table du plan actuel.');
+          }
+          await checkDiningReservation(
+            tx,
+            diningTableId,
+            units,
+            booking!['starts_at'],
+            booking['ends_at'],
+            previous?['id'],
+          );
+        } else {
+          throw StateError('Choisissez une table sur le plan de salle.');
+        }
+      }
+      if (booking != null) {
         // Prevent the same guest booking overlapping restaurant/spa appointments.
         final overlap = await tx.rawQuery(
-          """SELECT r.id FROM guest_services_records r JOIN guest_services_slots s ON s.id = r.slot_id
+          """SELECT r.id FROM guest_services_records r
           WHERE r.guest_id = ? AND r.id != ? AND r.status IN ('pending','confirmed','in_progress')
-          AND s.starts_at < ? AND s.ends_at > ?""",
-          [uid, previous?['id'] ?? -1, slot['ends_at'], slot['starts_at']],
+          AND r.starts_at < ? AND r.ends_at > ?""",
+          [
+            uid,
+            previous?['id'] ?? -1,
+            booking['ends_at'],
+            booking['starts_at'],
+          ],
         );
         if (overlap.isNotEmpty) {
           throw StateError('Vous avez déjà une réservation sur cette période.');
         }
-      } else if (slotId != null) {
-        throw StateError('Ce service n’utilise pas de créneau.');
       }
       final data = {
         'guest_id': uid,
-        'guest_name': session.user!.fullName,
+        'guest_name': visitorName?.trim() ?? guest.fullName,
         'kind': kind,
         'title': title.trim(),
         'details': details.trim(),
+        if (kind == 'restaurant')
+          'confirmation_email': email == null || email.isEmpty ? null : email,
         'slot_id': slotId,
+        'dining_table_id': kind == 'restaurant' ? diningTableId : null,
         'slot_name': booking?['name'],
         'starts_at': booking?['starts_at'],
         'ends_at': booking?['ends_at'],
@@ -359,6 +724,7 @@ class ServiceDeskStore {
         id = await tx.insert('guest_services_records', {
           ...data,
           'created_at': timestamp(),
+          if (staffBooking) 'status': 'confirmed',
         });
       } else {
         id = previous['id'] as int;
@@ -373,6 +739,10 @@ class ServiceDeskStore {
       await audit(tx, 'record', id, previous == null ? 'created' : 'updated');
       return id;
     });
+    if (staffBooking && email != null && email.isNotEmpty) {
+      await sendRestaurantConfirmation(recordId);
+    }
+    return recordId;
   }
 
   Future<void> status(
@@ -402,6 +772,9 @@ class ServiceDeskStore {
                 }[current]?.contains(next) ??
                 false);
       if (!allowed) throw StateError('Changement de statut non autorisé.');
+      if (row['kind'] == 'restaurant' && next == 'in_progress') {
+        throw StateError('Placez le groupe depuis le plan de salle.');
+      }
       if (next == 'rejected' || (!isGuest && next == 'cancelled')) {
         text(reason, 500, 'Motif');
       }
@@ -416,6 +789,14 @@ class ServiceDeskStore {
         where: 'id = ?',
         whereArgs: [row['id']],
       );
+      if (next == 'completed' || next == 'cancelled') {
+        await tx.update(
+          'guest_services_seatings',
+          {'released_at': timestamp()},
+          where: 'record_id = ? AND released_at IS NULL',
+          whereArgs: [row['id']],
+        );
+      }
       await audit(
         tx,
         'record',
@@ -423,6 +804,80 @@ class ServiceDeskStore {
         'status:$next${reason.trim().isEmpty ? '' : ':${reason.trim()}'}',
       );
     });
+    if (next == 'confirmed' && previous['kind'] == 'restaurant') {
+      await sendRestaurantConfirmation(previous['id'] as int);
+    }
+  }
+
+  static final _sendingConfirmations = <String>{};
+
+  Future<void> sendRestaurantConfirmation(int id) async {
+    if (!(session.user?.hasAnyRole({
+          AppRole.receptionist,
+          ...AppRole.management,
+        }) ??
+        false)) {
+      throw StateError('Envoi réservé à la réception et à la direction.');
+    }
+    final db = session.database.database;
+    final payload = await db.transaction((tx) async {
+      final rows = await tx.rawQuery(
+        '''
+        SELECT r.*, CASE WHEN t.shape IS NULL THEN t.name
+          ELSE CAST(101 + t.position AS TEXT) END AS table_name
+        FROM guest_services_records r
+        LEFT JOIN guest_services_dining_tables t ON t.id = r.dining_table_id
+        WHERE r.id = ? AND r.kind = 'restaurant' AND r.status = 'confirmed'
+          AND r.confirmation_email IS NOT NULL
+          AND COALESCE(r.confirmation_email_status, '') != 'accepted'
+      ''',
+        [id],
+      );
+      if (rows.isEmpty) return null;
+      final row = rows.single;
+      final key =
+          row['confirmation_email_key'] as String? ??
+          (await tx.rawQuery("""
+            SELECT lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) ||
+              '-4' || substr(hex(randomblob(2)), 2) || '-8' ||
+              substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6))) AS key
+          """)).single['key']
+              as String;
+      await tx.update(
+        'guest_services_records',
+        {'confirmation_email_key': key},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      return <String, Object?>{
+        'idempotencyKey': key,
+        'reference': 'REST-$id',
+        'email': row['confirmation_email'],
+        'guest': row['guest_name'],
+        'startsAt': row['starts_at'],
+        'seats': row['units'],
+        'table': row['table_name'],
+      };
+    });
+    if (payload == null) return;
+    final key = payload['idempotencyKey'] as String;
+    if (!_sendingConfirmations.add(key)) return;
+    try {
+      var status = 'accepted';
+      try {
+        await RestaurantConfirmation().send(payload);
+      } catch (_) {
+        status = 'failed';
+      }
+      await db.update(
+        'guest_services_records',
+        {'confirmation_email_status': status},
+        where: 'id = ? AND confirmation_email_key = ?',
+        whereArgs: [id, key],
+      );
+    } finally {
+      _sendingConfirmations.remove(key);
+    }
   }
 
   Future<void> assign(Map<String, Object?> previous, String? assignee) async {

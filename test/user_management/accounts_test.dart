@@ -79,6 +79,11 @@ void main() {
       (await helper.login('admin@admin.com', 'admin1234!'))?.role,
       'admin',
     );
+    expect(
+      (await helper.login('  ADMIN@ADMIN.COM  ', 'admin1234!'))?.role,
+      'admin',
+    );
+    expect(await helper.login('  ADMIN@ADMIN.COM  ', 'mauvais'), isNull);
     expect(await helper.login('admin@admin.com', 'mauvais'), isNull);
     expect(
       await helper.verifySecurityAnswer('admin@admin.com', ' rex '),
@@ -89,7 +94,7 @@ void main() {
     await helper.insertUser(
       AppUser(
         id: '0',
-        fullName: 'sarah@nova.test',
+        fullName: '  Sarah@Nova.Test  ',
         displayName: 'Sarah',
         role: 'staff',
         points: 0,
@@ -106,7 +111,20 @@ void main() {
       (await helper.login('sarah@nova.test', 'menage-2026'))?.displayName,
       'Sarah',
     );
-    await helper.resetPassword('sarah@nova.test', 'nouveau-1');
+    await expectLater(
+      helper.insertUser(
+        AppUser(
+          id: '0',
+          fullName: 'SARAH@NOVA.TEST',
+          displayName: 'Autre Sarah',
+          role: 'guest',
+          points: 0,
+        ),
+        'autre-secret',
+      ),
+      throwsStateError,
+    );
+    await helper.resetPassword(' SARAH@NOVA.TEST ', 'nouveau-1');
     expect(await helper.login('sarah@nova.test', 'menage-2026'), isNull);
     expect(await helper.login('sarah@nova.test', 'nouveau-1'), isNotNull);
 

@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import 'package:flutter/widgets.dart' show StringCharacters;
 import 'service_desk_store.dart';
 import 'dart:convert';
 import '../../shared/models/app_user.dart';
@@ -19,7 +20,7 @@ class GuestServiceStore {
 
   static final schema = ModuleSchema(
     module: 'guest_services',
-    version: 6,
+    version: 11,
     migrate: (tx, from, to) async {
       if (from < 1) {
         await tx.execute(
@@ -120,6 +121,39 @@ class GuestServiceStore {
         await tx.execute(
           'CREATE INDEX guest_services_orders_delivery ON guest_services_orders(delivery_agent_id, status)',
         );
+      }
+      if (from < 7 && to >= 7) {
+        await ServiceDeskStore.migrateRestaurantFloor(tx);
+      }
+      if (from < 8 && to >= 8) {
+        await ServiceDeskStore.migrateDiningReservations(tx);
+      }
+      if (from < 9 && to >= 9) {
+        await ServiceDeskStore.migrateFixedDiningRoom(tx);
+      }
+      if (from < 10 && to >= 10) {
+        await tx.execute('''CREATE TABLE guest_services_exchange_rates (
+          id INTEGER PRIMARY KEY CHECK(id = 1), rate REAL NOT NULL,
+          rate_date TEXT NOT NULL, fetched_at TEXT NOT NULL)''');
+        await tx.execute(
+          'ALTER TABLE guest_services_records ADD COLUMN confirmation_email TEXT',
+        );
+        await tx.execute(
+          'ALTER TABLE guest_services_records ADD COLUMN confirmation_email_key TEXT',
+        );
+        await tx.execute(
+          'ALTER TABLE guest_services_records ADD COLUMN confirmation_email_status TEXT',
+        );
+      }
+      if (from < 11 && to >= 11) {
+        await tx.execute('''CREATE TABLE guest_services_currency_rates (
+          currency TEXT PRIMARY KEY, rate REAL NOT NULL,
+          rate_date TEXT NOT NULL, fetched_at TEXT NOT NULL)''');
+        await tx.execute(
+          '''INSERT INTO guest_services_currency_rates
+          SELECT 'TND', rate, rate_date, fetched_at FROM guest_services_exchange_rates''',
+        );
+        await tx.execute('DROP TABLE guest_services_exchange_rates');
       }
     },
   );
@@ -372,11 +406,43 @@ class GuestServiceStore {
   Future<List<Map<String, Object?>>> kitchenOrders() async {
     _requireKitchen();
     return session.database.database.rawQuery("""
-      SELECT id, room_number, lines, status
-      FROM guest_services_orders
-      WHERE stay_id IS NOT NULL AND status IN ('accepted', 'preparing', 'ready')
-      ORDER BY (status = 'ready'), id ASC
+      SELECT o.id, o.room_number, o.lines, o.status, o.created_at,
+        (SELECT MAX(h.created_at) FROM guest_services_order_history h
+         WHERE h.order_id = o.id AND h.status = 'kitchen_started') AS started_at
+      FROM guest_services_orders o
+      WHERE o.stay_id IS NOT NULL AND o.status IN ('accepted', 'preparing', 'ready')
+      ORDER BY o.id ASC
     """);
+  }
+
+  Future<void> startPreparation(int orderId) async {
+    _requireKitchen();
+    final actor = session.user!.id;
+    await session.database.database.transaction((tx) async {
+      // One recorded preparation lane. A completed or cancelled order releases it.
+      final inserted = await tx.rawInsert(
+        """
+        INSERT INTO guest_services_order_history (order_id, status, actor_id, created_at)
+        SELECT id, 'kitchen_started', ?, ? FROM guest_services_orders
+        WHERE id = ? AND stay_id IS NOT NULL AND status IN ('accepted', 'preparing')
+        AND NOT EXISTS (
+          SELECT 1 FROM guest_services_orders o
+          JOIN guest_services_order_history h ON h.order_id = o.id
+          WHERE o.status IN ('accepted', 'preparing') AND h.status = 'kitchen_started'
+        )
+      """,
+        [actor, DateTime.now().toUtc().toIso8601String(), orderId],
+      );
+      // SQLite retains its last insert ID even when INSERT ... SELECT inserts nothing.
+      final changed = (await tx.rawQuery(
+        'SELECT changes() AS count',
+      )).single['count'];
+      if (changed != 1 || inserted <= 0) {
+        throw StateError(
+          'Une préparation est déjà en cours ou la commande a changé.',
+        );
+      }
+    });
   }
 
   Future<void> markOrderReady(int orderId) async {
@@ -406,6 +472,38 @@ class GuestServiceStore {
     requireStaff();
     final people = await session.staff.users(roles: {AppRole.staff});
     return people.where((person) => person.role == AppRole.staff).toList();
+  }
+
+  Future<List<({AppUser agent, int activeDeliveries})>> deliverySuggestions(
+    int orderId,
+  ) async {
+    final agents = await deliveryAgents();
+    final statuses = deliveryStatuses.toList();
+    final rows = await session.database.database.rawQuery(
+      '''
+      SELECT delivery_agent_id, COUNT(*) AS total
+      FROM guest_services_orders
+      WHERE id != ? AND delivery_agent_id IS NOT NULL
+        AND status IN (${List.filled(statuses.length, '?').join(',')})
+      GROUP BY delivery_agent_id
+    ''',
+      [orderId, ...statuses],
+    );
+    final counts = {
+      for (final row in rows)
+        row['delivery_agent_id'] as String: row['total'] as int,
+    };
+    return [
+      for (final agent in agents)
+        (agent: agent, activeDeliveries: counts[agent.id] ?? 0),
+    ]..sort((a, b) {
+      final load = a.activeDeliveries.compareTo(b.activeDeliveries);
+      if (load != 0) return load;
+      final name = a.agent.fullName.toLowerCase().compareTo(
+        b.agent.fullName.toLowerCase(),
+      );
+      return name != 0 ? name : a.agent.id.compareTo(b.agent.id);
+    });
   }
 
   Future<AppUser> _deliveryAgent(String? id) async {
@@ -637,15 +735,15 @@ class GuestServiceStore {
   Future<void> saveMenuItem(MenuItem item, {bool create = false}) async {
     requireManager();
     if (item.name.trim().isEmpty ||
-        item.name.length > 80 ||
-        item.description.length > 500 ||
+        item.name.characters.length > 80 ||
+        item.description.characters.length > 500 ||
         item.priceCents < 1 ||
         item.priceCents > 100000 ||
         item.minutes < 1 ||
         item.minutes > 180 ||
         item.allergens.trim().isEmpty ||
-        item.allergens.length > 250 ||
-        item.symbol.length > 16) {
+        item.allergens.characters.length > 250 ||
+        item.symbol.characters.length > 16) {
       throw StateError('Vérifiez les informations du plat.');
     }
     await session.database.database.transaction((tx) async {

@@ -9,11 +9,17 @@ import '../../shared/models/app_user.dart';
 import '../../shared/services/app_session.dart';
 import '../models/room_service.dart';
 import '../services/guest_service_store.dart';
+import '../services/room_service_exchange.dart';
 import 'reception_orders_screen.dart';
 
 class GuestServicesHomeScreen extends StatefulWidget {
   final AppSession session;
-  const GuestServicesHomeScreen({super.key, required this.session});
+  final int initialTab;
+  const GuestServicesHomeScreen({
+    super.key,
+    required this.session,
+    this.initialTab = 0,
+  });
   @override
   State<GuestServicesHomeScreen> createState() =>
       _GuestServicesHomeScreenState();
@@ -25,12 +31,107 @@ class _GuestServicesHomeScreenState extends State<GuestServicesHomeScreen> {
   List<MenuItem> catalog = [];
   Map<String, Object?>? stay;
   List<Map<String, Object?>> orders = [];
-  int tab = 0;
+  late int tab = widget.initialTab;
   String category = 'Tout', search = '';
   bool vegetarian = false, loading = true, busy = false;
   String? error;
+  ({double rate, String date, bool cached})? exchange;
+  String currency = 'EUR';
+  bool exchangeLoading = false;
   int get total => cart.fold(0, (sum, line) => sum + line.total);
   int get count => cart.fold(0, (sum, line) => sum + line.quantity);
+
+  String convertedPrice(int cents) =>
+      '${(cents * exchange!.rate / 100).toStringAsFixed(3).replaceAll('.', ',')} $currency';
+
+  Future<void> chooseCurrency() async {
+    const choices = {
+      'EUR': 'Euro',
+      'TND': 'Dinar tunisien',
+      'USD': 'Dollar américain',
+      'GBP': 'Livre sterling',
+      'CAD': 'Dollar canadien',
+      'CHF': 'Franc suisse',
+      'JPY': 'Yen japonais',
+      'MAD': 'Dirham marocain',
+      'AED': 'Dirham des Émirats',
+      'SAR': 'Riyal saoudien',
+    };
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Devise d’affichage'),
+        children: [
+          for (final entry in choices.entries)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, entry.key),
+              child: Text('${entry.key} · ${entry.value}'),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, ''),
+            child: const Text('Autre devise…'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || selected == null) return;
+    var next = selected;
+    if (next.isEmpty) {
+      final code = await serviceText(
+        context,
+        'Code de la devise (ex. DZD)',
+        max: 3,
+      );
+      if (!mounted || code == null) return;
+      next = code.trim().toUpperCase();
+      if (!RegExp(r'^[A-Z]{3}$').hasMatch(next)) {
+        showFeedback(context, 'Saisissez un code de devise à trois lettres.');
+        return;
+      }
+    }
+    if (next == 'EUR') {
+      setState(() {
+        exchange = null;
+        currency = 'EUR';
+      });
+      return;
+    }
+    setState(() => exchangeLoading = true);
+    try {
+      final result = await RoomServiceExchange(
+        widget.session.database.database,
+      ).load(currency: next);
+      if (mounted) {
+        setState(() {
+          exchange = result;
+          currency = next;
+        });
+      }
+    } catch (_) {
+      if (mounted) showFeedback(context, 'Taux EUR → $next indisponible.');
+    } finally {
+      if (mounted) setState(() => exchangeLoading = false);
+    }
+  }
+
+  Widget exchangeButton() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      TextButton.icon(
+        onPressed: exchangeLoading ? null : chooseCurrency,
+        icon: const Icon(Icons.currency_exchange),
+        label: Text(
+          exchangeLoading
+              ? 'Chargement du taux…'
+              : 'Devise d’affichage · $currency',
+        ),
+      ),
+      if (exchange case final quote?)
+        Text(
+          'Taux Frankfurter du ${quote.date}${quote.cached ? ' · taux enregistré' : ''}',
+        ),
+    ],
+  );
 
   @override
   void initState() {
@@ -331,6 +432,7 @@ class _GuestServicesHomeScreenState extends State<GuestServicesHomeScreen> {
             ],
           ),
         ),
+        exchangeButton(),
         const SizedBox(height: 16),
         _Notice(
           stay == null
@@ -421,6 +523,8 @@ class _GuestServicesHomeScreenState extends State<GuestServicesHomeScreen> {
                                 fontSize: 15,
                               ),
                             ),
+                            if (exchange != null && item.available)
+                              Text('≈ ${convertedPrice(item.priceCents)}'),
                             const SizedBox(height: 5),
                             Text(
                               item.description,
@@ -589,6 +693,9 @@ class _GuestServicesHomeScreenState extends State<GuestServicesHomeScreen> {
             Text(euros(total), style: Theme.of(context).textTheme.titleLarge),
           ],
         ),
+        if (exchange != null)
+          Text('Total indicatif · ≈ ${convertedPrice(total)}'),
+        exchangeButton(),
         const SizedBox(height: 16),
         const _Notice(
           'Prix en euros, actualisés au chargement. Vérifiez le total avant confirmation. Aucun paiement ni débit sur votre chambre à cette étape.',

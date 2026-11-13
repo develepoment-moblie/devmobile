@@ -612,4 +612,103 @@ void main() {
       expect(await store.loadCart(), hasLength(3));
     },
   );
+  test(
+    'agent suggestions count active deliveries and ignore the order being assigned',
+    () async {
+      await store.saveCart([const CartLine('coffee', 1, '')]);
+      final firstOrder = await store.submit();
+      await store.saveCart([const CartLine('coffee', 1, '')]);
+      final secondOrder = await store.submit();
+      await expectLater(
+        store.deliverySuggestions(secondOrder),
+        throwsStateError,
+      );
+      session.signIn(
+        const AppUser(
+          id: 'reception',
+          fullName: 'Inès',
+          role: AppRole.receptionist,
+        ),
+      );
+      await store.transition(
+        firstOrder,
+        'placed',
+        'preparing',
+        agentId: 'lina',
+      );
+      final suggestions = await store.deliverySuggestions(secondOrder);
+      expect(suggestions.map((s) => s.agent.id), ['sarah', 'lina']);
+      expect(suggestions.map((s) => s.activeDeliveries), [0, 1]);
+      final reassignment = await store.deliverySuggestions(firstOrder);
+      expect(reassignment.map((s) => s.agent.id), ['lina', 'sarah']);
+      expect(reassignment.every((s) => s.activeDeliveries == 0), isTrue);
+      session.signIn(kitchen);
+      await store.markOrderReady(firstOrder);
+      session.signIn(
+        const AppUser(id: 'lina', fullName: 'Lina', role: AppRole.staff),
+      );
+      await store.confirmDelivery(firstOrder);
+      session.signIn(
+        const AppUser(
+          id: 'reception',
+          fullName: 'Inès',
+          role: AppRole.receptionist,
+        ),
+      );
+      expect(
+        (await store.deliverySuggestions(secondOrder)).first.agent.id,
+        'lina',
+      );
+    },
+  );
+
+  test(
+    'kitchen records one concurrent start and releases the lane when ready',
+    () async {
+      await store.saveCart([const CartLine('coffee', 1, '')]);
+      final a = await store.submit();
+      await store.saveCart([const CartLine('coffee', 1, '')]);
+      final b = await store.submit();
+      await expectLater(store.startPreparation(a), throwsStateError);
+      session.signIn(kitchen);
+      await expectLater(store.startPreparation(a), throwsStateError);
+      session.signIn(
+        const AppUser(
+          id: 'reception',
+          fullName: 'Inès',
+          role: AppRole.receptionist,
+        ),
+      );
+      await store.transition(a, 'placed', 'preparing', agentId: 'sarah');
+      await store.transition(b, 'placed', 'preparing', agentId: 'lina');
+      session.signIn(kitchen);
+      Future<bool> start(int id) async {
+        try {
+          await store.startPreparation(id);
+          return true;
+        } on StateError {
+          return false;
+        }
+      }
+
+      final started = await Future.wait([start(a), start(b)]);
+      expect(started.where((value) => value), hasLength(1));
+      final firstId = started[0] ? a : b;
+      final nextId = started[0] ? b : a;
+      final queue = await store.kitchenOrders();
+      expect(
+        queue.singleWhere((row) => row['started_at'] != null)['id'],
+        firstId,
+      );
+      await expectLater(store.startPreparation(firstId), throwsStateError);
+      await store.markOrderReady(firstId);
+      await store.startPreparation(nextId);
+      expect(
+        (await store.kitchenOrders()).singleWhere(
+          (row) => row['id'] == nextId,
+        )['started_at'],
+        isNotNull,
+      );
+    },
+  );
 }

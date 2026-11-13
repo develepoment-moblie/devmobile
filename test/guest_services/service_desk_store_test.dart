@@ -1,9 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:nova_paris/shared/models/app_user.dart';
 import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_session.dart';
 import 'package:nova_paris/shared/services/staff_directory.dart';
 import 'package:nova_paris/guest_services/services/guest_service_store.dart';
+import 'package:nova_paris/guest_services/services/room_service_exchange.dart';
 import 'package:nova_paris/guest_services/services/service_desk_store.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -12,6 +15,8 @@ class _Staff implements StaffDirectory {
   Future<List<AppUser>> users({Set<String>? roles}) async => [
     reception,
     manager,
+    guest,
+    other,
   ].where((u) => roles == null || roles.contains(u.role)).toList();
 }
 
@@ -63,6 +68,136 @@ void main() {
 
   Future<Map<String, Object?>> record(int id) =>
       store.accessible(session.database.database, id);
+
+  test(
+    'restaurant bookings without slots block the table for two hours',
+    () async {
+      final start = now.add(const Duration(hours: 1));
+      Future<int> book(DateTime time) => store.saveRecord(
+        kind: 'restaurant',
+        title: 'Réservation restaurant',
+        details: '',
+        restaurantStart: time,
+        diningTableId: 2,
+        units: 2,
+      );
+      session.signIn(guest);
+      await expectLater(book(now), throwsStateError);
+      final id = await book(start);
+      expect((await record(id))['slot_id'], isNull);
+      session.signIn(other);
+      final overlap = start.add(const Duration(hours: 1));
+      final tables = await store.restaurantTableChoicesAt(overlap);
+      expect(tables.singleWhere((table) => table['id'] == 2)['reserved'], 1);
+      await expectLater(book(overlap), throwsStateError);
+      await book(start.add(const Duration(hours: 2)));
+      session.signIn(reception);
+      await store.status(await record(id), 'confirmed');
+      await store.registerRestaurantArrival(id);
+      await store.seatRestaurantParty(id, 2);
+      expect((await record(id))['status'], 'in_progress');
+    },
+  );
+
+  test('exchange preview reuses a dated rate when offline', () async {
+    final db = session.database.database;
+    final exchange = RoomServiceExchange(db);
+    final live = await http.runWithClient(
+      exchange.load,
+      () => MockClient((request) async {
+        expect(request.url.path, '/v2/rate/EUR/TND');
+        return http.Response('{"date":"2026-11-10","rate":3.4}', 200);
+      }),
+    );
+    expect(live.cached, isFalse);
+    await db.update('guest_services_currency_rates', {
+      'fetched_at': '2026-01-01T00:00:00.000Z',
+    });
+    final cached = await http.runWithClient(
+      exchange.load,
+      () => MockClient((_) async => throw http.ClientException('offline')),
+    );
+    expect(cached, (rate: 3.4, date: '2026-11-10', cached: true));
+  });
+
+  test('a failed email leaves the restaurant booking confirmed', () async {
+    final shift = await slot(capacity: 4);
+    session.signIn(guest);
+    final id = await store.saveRecord(
+      kind: 'restaurant',
+      title: 'Réservation restaurant',
+      details: '',
+      slotId: shift['id'] as int,
+      diningTableId: 2,
+      units: 2,
+      confirmationEmail: 'guest@example.test',
+    );
+    expect((await record(id))['confirmation_email_status'], isNull);
+    session.signIn(reception);
+    await store.status(await record(id), 'confirmed');
+    final confirmed = await record(id);
+    expect(confirmed['status'], 'confirmed');
+    expect(confirmed['confirmation_email_status'], 'failed');
+    await store.sendRestaurantConfirmation(id);
+    expect(
+      (await record(id))['confirmation_email_key'],
+      confirmed['confirmation_email_key'],
+    );
+  });
+
+  test('a visitor booking needs no account and reserves the table', () async {
+    final shift = await slot(capacity: 8);
+    Future<int> bookVisitor() => store.saveRecord(
+      kind: 'restaurant',
+      title: 'Réservation restaurant',
+      details: '',
+      slotId: shift['id'] as int,
+      diningTableId: 2,
+      units: 4,
+      visitorName: ' Sam Martin ',
+    );
+    final id = await bookVisitor();
+    final booking = await record(id);
+    expect(booking['status'], 'confirmed');
+    expect(booking['guest_name'], 'Sam Martin');
+    await expectLater(bookVisitor(), throwsStateError);
+    session.signIn(guest);
+    expect(await store.records(), isEmpty);
+    await expectLater(bookVisitor(), throwsStateError);
+  });
+
+  test('management books the fixed floor on behalf of a client', () async {
+    final shift = await slot(capacity: 12);
+    final slotId = shift['id'] as int;
+    final plan = await store.restaurantTableChoices(slotId);
+    expect(plan.map((table) => table['seats']).toSet(), {2, 4, 6, 8});
+    expect(plan.map((table) => table['shape']).toSet(), {
+      'square',
+      'rectangle',
+      'circle',
+    });
+    final tableId =
+        plan.singleWhere((table) => table['name'] == '104')['id'] as int;
+    final id = await store.saveRecord(
+      kind: 'restaurant',
+      title: 'Dîner',
+      details: 'Réservation par la direction',
+      slotId: slotId,
+      diningTableId: tableId,
+      units: 6,
+      guestId: guest.id,
+    );
+    expect((await record(id))['status'], 'confirmed');
+    session.signIn(other);
+    expect(await store.records(), isEmpty);
+    final updated = await store.restaurantTableChoices(slotId);
+    expect(
+      updated.singleWhere((table) => table['id'] == tableId)['reserved'],
+      1,
+    );
+    session.signIn(guest);
+    expect((await store.records()).single['dining_table_name'], '104');
+  });
   test('slot CRUD validates overlap, capacity and stale versions', () async {
     final s = await slot();
     await expectLater(slot(), throwsStateError);
@@ -96,6 +231,7 @@ void main() {
         title: 'Dîner',
         details: 'Deux personnes',
         slotId: s['id'] as int,
+        diningTableId: 1,
         units: 2,
       );
       expect((await record(id))['price_cents'], 5000);
@@ -106,6 +242,7 @@ void main() {
           title: 'Dîner',
           details: 'Une personne',
           slotId: s['id'] as int,
+          diningTableId: 1,
         ),
         throwsStateError,
       );
@@ -122,6 +259,7 @@ void main() {
           title: 'Changement',
           details: 'Test',
           slotId: s['id'] as int,
+          diningTableId: 1,
         ),
         throwsStateError,
       );
@@ -131,6 +269,7 @@ void main() {
         title: 'Dîner',
         details: 'Une personne',
         slotId: s['id'] as int,
+        diningTableId: 1,
       );
     },
   );
@@ -143,6 +282,7 @@ void main() {
       title: 'Dîner',
       details: 'Dîner',
       slotId: first['id'] as int,
+      diningTableId: 1,
     );
     await expectLater(
       store.saveRecord(
@@ -150,6 +290,7 @@ void main() {
         title: 'Autre dîner',
         details: 'Même horaire',
         slotId: second['id'] as int,
+        diningTableId: 2,
       ),
       throwsStateError,
     );
@@ -163,6 +304,7 @@ void main() {
         title: 'Dîner',
         details: 'Dîner',
         slotId: second['id'] as int,
+        diningTableId: 2,
       ),
       throwsStateError,
     );
@@ -278,6 +420,7 @@ void main() {
           title: 'Dîner',
           details: 'Une personne',
           slotId: s['id'] as int,
+          diningTableId: 1,
         );
         return true;
       } on StateError {
@@ -313,6 +456,83 @@ void main() {
       await expectLater(store.assign(old, null), throwsStateError);
       await store.assign(await record(id), null);
       expect((await record(id))['assigned_to'], isNull);
+    },
+  );
+  test(
+    'restaurant arrival, table assignment and release protect occupied tables',
+    () async {
+      final shift = await slot(capacity: 8);
+
+      final tables = await store.diningTables();
+      final small =
+          tables.singleWhere((table) => table['name'] == '101')['id'] as int;
+      final large =
+          tables.singleWhere((table) => table['name'] == '102')['id'] as int;
+      session.signIn(guest);
+      final a = await store.saveRecord(
+        kind: 'restaurant',
+        title: 'Déjeuner',
+        details: 'Trois personnes',
+        slotId: shift['id'] as int,
+        diningTableId: large,
+        units: 3,
+      );
+      await expectLater(store.registerRestaurantArrival(a), throwsStateError);
+      session.signIn(other);
+      final choices = await store.restaurantTableChoices(shift['id'] as int);
+      expect(
+        choices.singleWhere((table) => table['id'] == large)['reserved'],
+        1,
+      );
+      await expectLater(
+        store.saveRecord(
+          kind: 'restaurant',
+          title: 'Déjeuner',
+          details: 'Deux personnes',
+          slotId: shift['id'] as int,
+          diningTableId: large,
+          units: 2,
+        ),
+        throwsStateError,
+      );
+      final b = await store.saveRecord(
+        kind: 'restaurant',
+        title: 'Déjeuner',
+        details: 'Deux personnes',
+        slotId: shift['id'] as int,
+        diningTableId: small,
+        units: 2,
+      );
+      session.signIn(reception);
+      await store.status(await record(a), 'confirmed');
+      await store.status(await record(b), 'confirmed');
+      expect(await store.restaurantArrivals(), hasLength(2));
+      await expectLater(store.seatRestaurantParty(a, large), throwsStateError);
+      await store.registerRestaurantArrival(a);
+      await store.registerRestaurantArrival(b);
+      await expectLater(store.seatRestaurantParty(a, small), throwsStateError);
+      await store.seatRestaurantParty(a, large);
+      await expectLater(store.seatRestaurantParty(b, large), throwsStateError);
+      expect((await record(b))['status'], 'confirmed');
+      expect((await store.restaurantArrivals()).single['id'], b);
+      await store.finishRestaurantService(a);
+      expect((await record(a))['status'], 'completed');
+      await store.seatRestaurantParty(b, large);
+      expect(
+        (await store.diningTables()).singleWhere(
+          (table) => table['id'] == large,
+        )['record_id'],
+        b,
+      );
+      await store.status(
+        await record(b),
+        'cancelled',
+        reason: 'Départ anticipé',
+      );
+      expect(
+        (await store.diningTables()).every((t) => t['record_id'] == null),
+        isTrue,
+      );
     },
   );
 }

@@ -8,8 +8,8 @@ class DemoStaffDirectory implements StaffDirectory {
   const DemoStaffDirectory();
 
   static const people = [
-    AppUser(id: 'kitchen', fullName: 'Cuisine Démo', role: AppRole.kitchen),
     AppUser(id: 'admin', fullName: 'Administrateur', role: AppRole.admin),
+    AppUser(id: 'kitchen', fullName: 'Cuisine Démo', role: AppRole.kitchen),
     AppUser(id: 'manager', fullName: 'Manager Démo', role: AppRole.manager),
     AppUser(
       id: 'reception',

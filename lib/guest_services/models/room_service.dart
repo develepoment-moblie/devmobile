@@ -192,6 +192,7 @@ const orderStatusLabels = <String, String>{
   'placed': 'Enregistrée · en attente',
   'accepted': 'Acceptée',
   'preparing': 'En préparation',
+  'kitchen_started': 'Préparation démarrée',
   'ready': 'Prête à livrer',
   'out_for_delivery': 'En livraison',
   'delivered': 'Livrée',

@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import '../shared/models/app_user.dart';
 import '../shared/models/nova_module.dart';
 import '../shared/services/app_session.dart';
+import '../shared/services/app_database.dart';
 import 'screens/maintenance_home_screen.dart';
+import 'services/maintenance_store.dart';
 
-// Entry point of the Maintenance module. Owner: à compléter.
+// Entry point of the Maintenance module. Owner: Ayoub Belgacem.
 // Everything for this module lives in lib/maintenance/. See lib/maintenance/README.md.
 class MaintenanceModule extends NovaModule {
   const MaintenanceModule();
@@ -19,7 +21,7 @@ class MaintenanceModule extends NovaModule {
   @override
   IconData get icon => Icons.build_outlined;
   @override
-  String get owner => 'à compléter';
+  String get owner => 'Ayoub Belgacem';
   @override
   Set<String> get roles => {
     AppRole.maintenance,
@@ -30,17 +32,8 @@ class MaintenanceModule extends NovaModule {
     AppRole.admin,
   };
 
-  // Add your tables here when you need them, for example:
-  // @override
-  // ModuleSchema get schema => ModuleSchema(
-  //   module: id,
-  //   version: 1,
-  //   migrate: (tx, from, to) async {
-  //     if (from < 1) {
-  //       await tx.execute('CREATE TABLE maintenance_items (id TEXT PRIMARY KEY, ...)');
-  //     }
-  //   },
-  // );
+  @override
+  ModuleSchema get schema => maintenanceSchema;
 
   @override
   Widget buildHome(BuildContext context, AppSession session) =>

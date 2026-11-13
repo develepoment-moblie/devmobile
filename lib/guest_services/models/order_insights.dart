@@ -19,14 +19,18 @@ class OrderInsights {
     return now.difference(created).inMinutes.clamp(0, 10000000);
   }
 
-  static int? target(Map<String, Object?> order) {
+  static int? preparationMinutes(Map<String, Object?> order) {
     final lines = jsonDecode(order['lines'] as String) as List;
     final estimates = lines.map((line) => line['minutes']).toList();
     if (estimates.isEmpty || estimates.any((e) => e is! int || e <= 0)) {
       return null;
     }
-    return estimates.cast<int>().reduce((a, b) => a > b ? a : b) +
-        deliveryAllowanceMinutes;
+    return estimates.cast<int>().reduce((a, b) => a > b ? a : b);
+  }
+
+  static int? target(Map<String, Object?> order) {
+    final minutes = preparationMinutes(order);
+    return minutes == null ? null : minutes + deliveryAllowanceMinutes;
   }
 
   static bool overdue(Map<String, Object?> order, DateTime now) {

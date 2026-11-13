@@ -82,7 +82,7 @@ class _ReceptionOrdersScreenState extends State<ReceptionOrdersScreen> {
         if (!confirmed || !mounted) return;
         await store.transition(id, status, next, reason: reason);
       } else {
-        final agents = await store.deliveryAgents();
+        final agents = await store.deliverySuggestions(id);
         if (!mounted) return;
         if (agents.isEmpty) {
           showFeedback(
@@ -100,11 +100,25 @@ class _ReceptionOrdersScreenState extends State<ReceptionOrdersScreen> {
                   : 'Attribuer la livraison',
             ),
             children: [
-              for (final person in agents)
+              for (final (index, suggestion) in agents.indexed)
                 SimpleDialogOption(
-                  onPressed: () => Navigator.pop(context, person.id),
-                  child: Text(person.fullName),
+                  onPressed: () => Navigator.pop(context, suggestion.agent.id),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(suggestion.agent.fullName),
+                      Text(
+                        '${index == 0 ? 'Recommandé · ' : ''}${suggestion.activeDeliveries} livraison(s) en cours',
+                      ),
+                    ],
+                  ),
                 ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 8, 24, 8),
+                child: Text(
+                  'Suggestion selon les livraisons attribuées. Vérifiez la disponibilité de l’agent.',
+                ),
+              ),
               SimpleDialogOption(
                 onPressed: () => Navigator.pop(context),
                 child: const Text('Revenir'),

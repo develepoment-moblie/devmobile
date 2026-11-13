@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../shared/models/app_user.dart';
 import '../shared/models/nova_module.dart';
 import '../shared/services/app_session.dart';
-import 'screens/guest_services_home_screen.dart';
+import 'screens/guest_services_hub_screen.dart';
 import '../shared/services/app_database.dart';
 import 'services/guest_service_store.dart';
 
@@ -36,5 +36,5 @@ class GuestServicesModule extends NovaModule {
 
   @override
   Widget buildHome(BuildContext context, AppSession session) =>
-      GuestServicesHomeScreen(session: session);
+      GuestServicesHubScreen(session: session);
 }

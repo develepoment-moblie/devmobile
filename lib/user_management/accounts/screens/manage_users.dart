@@ -8,6 +8,15 @@ const _cream = Color(0xFFF6F1EA);
 const _darkGreen = Color(0xFF1B3A32);
 const _muted = Color(0xFF8B8378);
 const _salmon = Color(0xFFD98E76);
+const _managedRoles = [
+  AppRole.guest,
+  AppRole.receptionist,
+  AppRole.kitchen,
+  AppRole.staff,
+  AppRole.manager,
+  AppRole.maintenance,
+  AppRole.admin,
+];
 
 class ManageUsersScreen extends StatefulWidget {
   const ManageUsersScreen({super.key});
@@ -17,8 +26,6 @@ class ManageUsersScreen extends StatefulWidget {
 }
 
 class _ManageUsersScreenState extends State<ManageUsersScreen> {
-  static const _roles = AppRole.all;
-
   late Future<List<AppUser>> _future;
 
   @override
@@ -67,8 +74,9 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
       _reload();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Erreur: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erreur: $e')));
     }
   }
 
@@ -95,13 +103,15 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
         role: result['role'] as String,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Utilisateur créé.')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Utilisateur créé.')));
       _reload();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Erreur: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erreur: $e')));
     }
   }
 
@@ -134,13 +144,15 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
     try {
       await AuthService.deleteProfile(user.id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Utilisateur supprimé.')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Utilisateur supprimé.')));
       _reload();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Erreur: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erreur: $e')));
     }
   }
 
@@ -157,8 +169,9 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
       _reload();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Erreur: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erreur: $e')));
     }
   }
 
@@ -283,7 +296,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
                         ),
                       ),
                       subtitle: Text(
-                        '${u.fullName} · ${u.role}',
+                        '${u.fullName} · ${AppRole.labels[u.role] ?? u.role}',
                         style: TextStyle(
                           color: _roleColor(u.role),
                           fontWeight: FontWeight.w500,
@@ -338,7 +351,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
                             ),
                           ),
                           const PopupMenuDivider(),
-                          ..._roles.map(
+                          ..._managedRoles.map(
                             (r) => PopupMenuItem(
                               value: 'role:$r',
                               child: Row(
@@ -352,7 +365,11 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
                                     ),
                                   ),
                                   const SizedBox(width: 10),
-                                  Text('Passer en « ${AppRole.labels[r] ?? r} »'),
+                                  Flexible(
+                                    child: Text(
+                                      'Passer en « ${AppRole.labels[r]} »',
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
@@ -391,8 +408,6 @@ class _UserFormSheet extends StatefulWidget {
 }
 
 class _UserFormSheetState extends State<_UserFormSheet> {
-  static const _roles = AppRole.all;
-
   late final TextEditingController _nameCtrl;
   late final TextEditingController _emailCtrl;
   late final TextEditingController _passCtrl;
@@ -405,7 +420,9 @@ class _UserFormSheetState extends State<_UserFormSheet> {
     _nameCtrl = TextEditingController(text: widget.initialName ?? '');
     _emailCtrl = TextEditingController();
     _passCtrl = TextEditingController();
-    _role = _roles.contains(widget.initialRole) ? widget.initialRole! : 'guest';
+    _role = _managedRoles.contains(widget.initialRole)
+        ? widget.initialRole!
+        : AppRole.guest;
   }
 
   @override
@@ -522,10 +539,10 @@ class _UserFormSheetState extends State<_UserFormSheet> {
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: _roles.map((r) {
+              children: _managedRoles.map((r) {
                 final selected = r == _role;
                 return ChoiceChip(
-                  label: Text(AppRole.labels[r] ?? r),
+                  label: Text(AppRole.labels[r]!),
                   selected: selected,
                   onSelected: (_) => setState(() => _role = r),
                   selectedColor: _darkGreen,

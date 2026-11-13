@@ -10,9 +10,11 @@ import '../services/housekeeping_backup.dart';
 import 'issues_screen.dart';
 import '../models/dashboard_data.dart';
 import '../services/housekeeping_store.dart';
+import '../services/housekeeping_sync.dart';
 import '../services/sqlite_housekeeping.dart';
 import 'lost_items_screen.dart';
 import 'stats_screen.dart';
+import 'sync_screen.dart';
 
 class StaffScreen extends StatelessWidget {
   final HotelData data;
@@ -64,6 +66,20 @@ class StaffScreen extends StatelessWidget {
               context,
               MaterialPageRoute<void>(
                 builder: (_) => BackupScreen(backup: HousekeepingBackup(store)),
+              ),
+            ),
+          ),
+        if (data.api case SqliteHousekeeping(
+          store: final HousekeepingStore store,
+        ))
+          (
+            'Synchronisation',
+            'Partager le travail avec les autres téléphones',
+            Icons.sync,
+            () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => SyncScreen(sync: housekeepingSyncFor(store)),
               ),
             ),
           ),

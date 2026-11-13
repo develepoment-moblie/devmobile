@@ -137,6 +137,7 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
       await tester.pumpAndSettle();
+      expect(find.text('Recommandé · 0 livraison(s) en cours'), findsOneWidget);
       await tester.tap(find.text('Sarah'));
       await tester.pumpAndSettle();
       await tester.runAsync(() async {
@@ -182,6 +183,18 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect(find.textContaining('Sans sucre'), findsOneWidget);
+      expect(find.textContaining('Prête vers'), findsOneWidget);
+      await tester.ensureVisible(find.text('Démarrer la préparation'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Démarrer la préparation'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Démarrer la préparation'), findsNothing);
+      await tester.ensureVisible(find.text('Marquer prête à livrer'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Marquer prête à livrer'));
       await tester.pumpAndSettle();
       await tester.runAsync(() async {

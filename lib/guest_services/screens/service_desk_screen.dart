@@ -1,3 +1,5 @@
+import 'restaurant_floor_screen.dart';
+import 'dining_floor_grid.dart';
 import 'package:flutter/material.dart';
 import '../../shared/custom/app_widgets.dart';
 import '../../shared/custom/app_theme.dart';
@@ -5,6 +7,7 @@ import '../../shared/services/app_session.dart';
 import '../../shared/models/app_user.dart';
 import '../models/room_service.dart';
 import '../services/service_desk_store.dart';
+import '../services/restaurant_confirmation.dart';
 
 String serviceDate(Object? value) {
   final date = DateTime.tryParse('$value')?.toLocal();
@@ -104,7 +107,12 @@ Future<bool> serviceConfirm(
 
 class ServiceDeskScreen extends StatefulWidget {
   final AppSession session;
-  const ServiceDeskScreen({super.key, required this.session});
+  final String initialKind;
+  const ServiceDeskScreen({
+    super.key,
+    required this.session,
+    this.initialKind = 'restaurant',
+  });
   @override
   State<ServiceDeskScreen> createState() => _ServiceDeskScreenState();
 }
@@ -112,7 +120,8 @@ class ServiceDeskScreen extends StatefulWidget {
 class _ServiceDeskScreenState extends State<ServiceDeskScreen> {
   late final store = ServiceDeskStore(widget.session);
   List<Map<String, Object?>> rows = [];
-  String kind = 'restaurant', query = '', status = 'all';
+  late String kind = widget.initialKind;
+  String query = '', status = 'all';
   bool archived = false, loading = true;
   String? error;
   @override
@@ -145,7 +154,7 @@ class _ServiceDeskScreenState extends State<ServiceDeskScreen> {
     final changed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (_) => _RecordForm(store: store, kind: kind),
+        builder: (_) => ServiceRecordForm(store: store, kind: kind),
       ),
     );
     if (changed == true) await load();
@@ -167,7 +176,8 @@ class _ServiceDeskScreenState extends State<ServiceDeskScreen> {
       appBar: AppBar(
         title: Text(store.isGuest ? 'Mes services' : 'Gestion des services'),
         actions: [
-          if (widget.session.user?.hasAnyRole(AppRole.management) ?? false)
+          if (kind == 'spa' &&
+              (widget.session.user?.hasAnyRole(AppRole.management) ?? false))
             IconButton(
               tooltip: 'Gérer les créneaux',
               icon: const Icon(Icons.event_available),
@@ -192,7 +202,11 @@ class _ServiceDeskScreenState extends State<ServiceDeskScreen> {
           ? FloatingActionButton.extended(
               onPressed: create,
               icon: const Icon(Icons.add),
-              label: const Text('Nouvelle demande'),
+              label: Text(
+                kind == 'restaurant'
+                    ? 'Réserver une table'
+                    : 'Nouvelle demande',
+              ),
             )
           : null,
       body: loading
@@ -221,6 +235,20 @@ class _ServiceDeskScreenState extends State<ServiceDeskScreen> {
                         ),
                     ],
                   ),
+                  if (!store.isGuest && kind == 'restaurant')
+                    FilledButton.icon(
+                      icon: const Icon(Icons.table_restaurant_outlined),
+                      label: const Text('Ouvrir le plan de salle'),
+                      onPressed: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) => RestaurantFloorScreen(store: store),
+                          ),
+                        );
+                        if (mounted) await load();
+                      },
+                    ),
                   const SizedBox(height: 12),
                   TextField(
                     decoration: const InputDecoration(
@@ -298,16 +326,21 @@ class _ServiceDeskScreenState extends State<ServiceDeskScreen> {
   }
 }
 
-class _RecordForm extends StatefulWidget {
+class ServiceRecordForm extends StatefulWidget {
   final ServiceDeskStore store;
   final String kind;
   final Map<String, Object?>? previous;
-  const _RecordForm({required this.store, required this.kind, this.previous});
+  const ServiceRecordForm({
+    super.key,
+    required this.store,
+    required this.kind,
+    this.previous,
+  });
   @override
-  State<_RecordForm> createState() => _RecordFormState();
+  State<ServiceRecordForm> createState() => _RecordFormState();
 }
 
-class _RecordFormState extends State<_RecordForm> {
+class _RecordFormState extends State<ServiceRecordForm> {
   final form = GlobalKey<FormState>();
   late final title = TextEditingController(
     text: widget.previous?['title'] as String?,
@@ -319,15 +352,41 @@ class _RecordFormState extends State<_RecordForm> {
     text: '${widget.previous?['units'] ?? 1}',
   );
   List<Map<String, Object?>> slots = [];
+  List<AppUser> guests = [];
+  final visitorName = TextEditingController();
+  late final confirmationEmail = TextEditingController(
+    text: widget.previous?['confirmation_email'] as String?,
+  );
+  bool externalVisitor = false;
+  String? guestId;
   int? selected;
+  int? selectedTable;
+  String? selectedTableName;
   DateTime? due;
+  DateTime? restaurantStart;
   bool busy = false, loading = true;
   String? error;
   bool get booking => {'restaurant', 'spa'}.contains(widget.kind);
+  bool get restaurant => widget.kind == 'restaurant';
+  bool get staffBooking => restaurant && !widget.store.isGuest;
+  int? get legacyRestaurantSlot {
+    final previous = widget.previous;
+    final oldStart = DateTime.tryParse('${previous?['starts_at']}');
+    return oldStart != null &&
+            (restaurantStart?.isAtSameMomentAs(oldStart) ?? false)
+        ? (previous?['slot_id'] as int?)
+        : null;
+  }
+
   @override
   void initState() {
     super.initState();
     selected = widget.previous?['slot_id'] as int?;
+    restaurantStart = DateTime.tryParse(
+      '${widget.previous?['starts_at']}',
+    )?.toLocal();
+    selectedTable = widget.previous?['dining_table_id'] as int?;
+    selectedTableName = widget.previous?['dining_table_name'] as String?;
     due = DateTime.tryParse('${widget.previous?['due_at']}')?.toLocal();
     load();
   }
@@ -337,16 +396,22 @@ class _RecordFormState extends State<_RecordForm> {
     title.dispose();
     details.dispose();
     units.dispose();
+    visitorName.dispose();
+    confirmationEmail.dispose();
     super.dispose();
   }
 
   Future<void> load() async {
     try {
-      final data = booking
+      final data = widget.kind == 'spa'
           ? await widget.store.slots(kind: widget.kind)
           : <Map<String, Object?>>[];
+      final clients = staffBooking
+          ? await widget.store.restaurantGuests()
+          : <AppUser>[];
       if (mounted) {
         setState(() {
+          guests = clients;
           slots = data
               .where(
                 (s) => DateTime.parse(
@@ -354,7 +419,11 @@ class _RecordFormState extends State<_RecordForm> {
                 ).isAfter(DateTime.now()),
               )
               .toList();
-          if (!slots.any((s) => s['id'] == selected)) selected = null;
+          if (!restaurant && !slots.any((s) => s['id'] == selected)) {
+            selected = null;
+            selectedTable = null;
+            selectedTableName = null;
+          }
           loading = false;
           error = null;
         });
@@ -376,11 +445,20 @@ class _RecordFormState extends State<_RecordForm> {
       await widget.store.saveRecord(
         previous: widget.previous,
         kind: widget.kind,
-        title: title.text,
+        title: restaurant && title.text.trim().isEmpty
+            ? 'Réservation restaurant'
+            : title.text,
         details: details.text,
-        slotId: selected,
+        slotId: restaurant ? legacyRestaurantSlot : selected,
+        restaurantStart: restaurant && legacyRestaurantSlot == null
+            ? restaurantStart
+            : null,
+        diningTableId: selectedTable,
         units: int.parse(units.text),
         dueAt: due,
+        guestId: externalVisitor ? null : guestId,
+        visitorName: externalVisitor ? visitorName.text : null,
+        confirmationEmail: restaurant ? confirmationEmail.text : null,
       );
       if (mounted) Navigator.pop(context, true);
     } on StateError catch (e) {
@@ -394,13 +472,127 @@ class _RecordFormState extends State<_RecordForm> {
     }
   }
 
+  Future<void> chooseTable() async {
+    final count = int.tryParse(units.text);
+    final start = restaurantStart;
+    if (start == null ||
+        !start.isAfter(DateTime.now()) ||
+        count == null ||
+        count < 1 ||
+        count > 20) {
+      showFeedback(
+        context,
+        'Choisissez une date et une heure à venir et indiquez le nombre de personnes.',
+      );
+      return;
+    }
+    final choices = widget.store.restaurantTableChoicesAt(
+      start,
+      end: legacyRestaurantSlot == null
+          ? null
+          : DateTime.tryParse('${widget.previous?['ends_at']}'),
+      recordId: widget.previous?['id'] as int?,
+    );
+    int? suggested;
+    var suggestionRuns = 0;
+    final choice = await showDialog<Map<String, Object?>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Choisir une table'),
+        content: SizedBox(
+          width: 440,
+          child: FutureBuilder(
+            future: choices,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return const Text('Plan indisponible. Réessayez.');
+              }
+              if (!snapshot.hasData) return const LinearProgressIndicator();
+              final tables = snapshot.data!;
+              if (tables.isEmpty) {
+                return const Text('Aucune table configurée pour ce créneau.');
+              }
+              final eligible =
+                  tables
+                      .where(
+                        (table) =>
+                            table['reserved'] == 0 &&
+                            (table['seats'] as int) >= count,
+                      )
+                      .toList()
+                    ..sort((a, b) {
+                      final capacity = (a['seats'] as int).compareTo(
+                        b['seats'] as int,
+                      );
+                      return capacity != 0
+                          ? capacity
+                          : (a['position'] as int).compareTo(
+                              b['position'] as int,
+                            );
+                    });
+              return StatefulBuilder(
+                builder: (context, update) => SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      DiningFloorGrid(
+                        tables: tables,
+                        selected: selectedTable,
+                        suggested: suggested,
+                        suggestionRuns: suggestionRuns,
+                        status: (table) {
+                          if (table['reserved'] == 1) return 'Réservée';
+                          return (table['seats'] as int) < count
+                              ? 'Trop petite'
+                              : 'Disponible';
+                        },
+                        onTable: (table) => Navigator.pop(context, table),
+                      ),
+                      const SizedBox(height: 8),
+                      if (eligible.isEmpty)
+                        Text('Aucune table disponible pour $count personne(s).')
+                      else
+                        OutlinedButton.icon(
+                          onPressed: () => update(() {
+                            suggested = eligible.first['id'] as int;
+                            suggestionRuns++;
+                          }),
+                          icon: const Icon(Icons.auto_awesome_outlined),
+                          label: Text('Suggérer une table pour $count'),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Fermer'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+    setState(() {
+      selectedTable = choice['id'] as int;
+      selectedTableName = choice['name'] as String;
+    });
+  }
+
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: !busy,
     child: Scaffold(
       appBar: AppBar(
         title: Text(
-          '${widget.previous == null ? 'Créer' : 'Modifier'} · ${serviceKinds[widget.kind]}',
+          restaurant
+              ? (widget.previous == null
+                    ? 'Réserver une table'
+                    : 'Modifier la réservation')
+              : '${widget.previous == null ? 'Créer' : 'Modifier'} · ${serviceKinds[widget.kind]}',
         ),
       ),
       body: loading
@@ -410,52 +602,137 @@ class _RecordFormState extends State<_RecordForm> {
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  TextFormField(
-                    controller: title,
-                    maxLength: 100,
-                    decoration: const InputDecoration(labelText: 'Objet'),
-                    validator: (v) =>
-                        v!.trim().isEmpty ? 'Objet obligatoire' : null,
-                  ),
-                  TextFormField(
-                    controller: details,
-                    maxLength: 2000,
-                    minLines: 3,
-                    maxLines: 6,
-                    decoration: const InputDecoration(labelText: 'Détails'),
-                    validator: (v) =>
-                        v!.trim().isEmpty ? 'Détails obligatoires' : null,
-                  ),
+                  if (staffBooking)
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Visiteur extérieur'),
+                      subtitle: const Text('Réserver sans compte hôtel'),
+                      value: externalVisitor,
+                      onChanged: busy
+                          ? null
+                          : (value) => setState(() => externalVisitor = value),
+                    ),
+                  if (staffBooking && externalVisitor)
+                    TextFormField(
+                      controller: visitorName,
+                      maxLength: 100,
+                      decoration: const InputDecoration(
+                        labelText: 'Nom du visiteur',
+                      ),
+                      validator: (value) =>
+                          value!.trim().isEmpty ? 'Nom obligatoire' : null,
+                    ),
+                  if (staffBooking && !externalVisitor)
+                    DropdownButtonFormField<String>(
+                      initialValue: guestId,
+                      decoration: const InputDecoration(labelText: 'Client'),
+                      isExpanded: true,
+                      items: [
+                        for (final client in guests)
+                          DropdownMenuItem(
+                            value: client.id,
+                            child: Text(client.fullName),
+                          ),
+                      ],
+                      onChanged: busy
+                          ? null
+                          : (value) => setState(() => guestId = value),
+                      validator: (value) =>
+                          value == null ? 'Choisissez un compte client.' : null,
+                    ),
+                  if (!restaurant) ...[
+                    TextFormField(
+                      controller: title,
+                      maxLength: 100,
+                      decoration: const InputDecoration(labelText: 'Objet'),
+                      validator: (v) =>
+                          v!.trim().isEmpty ? 'Objet obligatoire' : null,
+                    ),
+                    TextFormField(
+                      controller: details,
+                      maxLength: 2000,
+                      minLines: 3,
+                      maxLines: 6,
+                      decoration: const InputDecoration(labelText: 'Détails'),
+                      validator: (v) =>
+                          v!.trim().isEmpty ? 'Détails obligatoires' : null,
+                    ),
+                  ],
                   if (error != null)
                     TextButton(onPressed: load, child: Text(error!)),
                   if (booking) ...[
-                    if (slots.isEmpty)
-                      const Text(
-                        'Aucun créneau disponible. Contactez la réception.',
-                      ),
-                    for (final slot in slots)
-                      CheckboxListTile(
-                        value: selected == slot['id'],
-                        onChanged: busy
+                    if (restaurant) ...[
+                      OutlinedButton.icon(
+                        onPressed: busy
                             ? null
-                            : (v) => setState(
-                                () => selected = v == true
-                                    ? slot['id'] as int
-                                    : null,
-                              ),
-                        title: Text(
-                          '${slot['name']} · ${serviceDate(slot['starts_at'])}',
-                        ),
-                        subtitle: Text(
-                          'Fin : ${serviceDate(slot['ends_at'])}\n${(slot['capacity'] as int) - (slot['reserved'] as int)} places restantes · ${euros(slot['price_cents'] as int)} / personne',
+                            : () async {
+                                final chosen = await chooseServiceDate(
+                                  context,
+                                  initial:
+                                      restaurantStart ??
+                                      DateTime.now().add(
+                                        const Duration(hours: 1),
+                                      ),
+                                );
+                                if (chosen == null || !mounted) return;
+                                if (!chosen.isAfter(DateTime.now())) {
+                                  showFeedback(
+                                    context,
+                                    'Choisissez une heure à venir.',
+                                  );
+                                  return;
+                                }
+                                setState(() {
+                                  restaurantStart = chosen;
+                                  selectedTable = null;
+                                  selectedTableName = null;
+                                });
+                              },
+                        icon: const Icon(Icons.event_outlined),
+                        label: Text(
+                          restaurantStart == null
+                              ? 'Choisir la date et l’heure'
+                              : serviceDate(restaurantStart!.toIso8601String()),
                         ),
                       ),
+                      if (legacyRestaurantSlot == null)
+                        const Text('La table est réservée pour 2 heures.'),
+                      const SizedBox(height: 12),
+                    ] else ...[
+                      if (slots.isEmpty)
+                        const Text(
+                          'Aucun créneau disponible. Contactez la réception.',
+                        ),
+                      for (final slot in slots)
+                        CheckboxListTile(
+                          value: selected == slot['id'],
+                          onChanged: busy
+                              ? null
+                              : (v) => setState(() {
+                                  selected = v == true
+                                      ? slot['id'] as int
+                                      : null;
+                                  selectedTable = null;
+                                  selectedTableName = null;
+                                }),
+                          title: Text(
+                            '${slot['name']} · ${serviceDate(slot['starts_at'])}',
+                          ),
+                          subtitle: Text(
+                            'Fin : ${serviceDate(slot['ends_at'])}\n${(slot['capacity'] as int) - (slot['reserved'] as int)} places restantes · ${euros(slot['price_cents'] as int)} / personne',
+                          ),
+                        ),
+                    ],
                     TextFormField(
                       controller: units,
                       decoration: const InputDecoration(
                         labelText: 'Nombre de personnes',
                       ),
                       keyboardType: TextInputType.number,
+                      onChanged: (_) => setState(() {
+                        selectedTable = null;
+                        selectedTableName = null;
+                      }),
                       validator: (v) =>
                           (int.tryParse(v!) ?? 0) < 1 ||
                               (int.tryParse(v) ?? 21) > 20
@@ -463,8 +740,56 @@ class _RecordFormState extends State<_RecordForm> {
                           : null,
                     ),
                     const SizedBox(height: 12),
-                    const Text(
-                      'La demande réserve des places et attend la confirmation de la réception. Aucun paiement automatique.',
+                    if (restaurant) ...[
+                      OutlinedButton.icon(
+                        onPressed: busy || restaurantStart == null
+                            ? null
+                            : chooseTable,
+                        icon: const Icon(Icons.table_restaurant_outlined),
+                        label: Text(
+                          selectedTableName == null
+                              ? 'Choisir une table sur le plan'
+                              : 'Table choisie · $selectedTableName',
+                        ),
+                      ),
+                      if (selectedTable != null)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.event_available_outlined),
+                          title: Text(
+                            'Table $selectedTableName · ${units.text} personne(s)',
+                          ),
+                          subtitle: Text(
+                            serviceDate(restaurantStart?.toIso8601String()),
+                          ),
+                        ),
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        controller: details,
+                        maxLength: 2000,
+                        decoration: const InputDecoration(
+                          labelText: 'Note (facultative)',
+                        ),
+                      ),
+                      TextFormField(
+                        controller: confirmationEmail,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(
+                          labelText: 'E-mail de confirmation (facultatif)',
+                        ),
+                        validator: (value) {
+                          final email = value?.trim() ?? '';
+                          return email.isEmpty ||
+                                  RestaurantConfirmation.validEmail(email)
+                              ? null
+                              : 'Adresse e-mail invalide.';
+                        },
+                      ),
+                    ],
+                    Text(
+                      staffBooking
+                          ? 'La réservation sera confirmée à l’enregistrement.'
+                          : 'La demande réserve des places et attend la confirmation de la réception. Aucun paiement automatique.',
                     ),
                   ],
                   if (!booking) ...[
@@ -493,10 +818,21 @@ class _RecordFormState extends State<_RecordForm> {
                   ],
                   const SizedBox(height: 20),
                   FilledButton(
-                    onPressed: busy || (booking && selected == null)
+                    onPressed:
+                        busy ||
+                            (widget.kind == 'spa' && selected == null) ||
+                            (restaurant &&
+                                (restaurantStart == null ||
+                                    selectedTable == null))
                         ? null
                         : save,
-                    child: Text(busy ? 'Enregistrement…' : 'Enregistrer'),
+                    child: Text(
+                      busy
+                          ? 'Enregistrement…'
+                          : restaurant && widget.previous == null
+                          ? 'Réserver'
+                          : 'Enregistrer',
+                    ),
                   ),
                 ],
               ),
@@ -720,15 +1056,40 @@ class _RecordDetailsState extends State<_RecordDetails> {
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 Text('${serviceKinds[r['kind']]} · ${r['guest_name']}'),
+                if (!widget.store.isGuest &&
+                    r['kind'] == 'restaurant' &&
+                    r['confirmation_email'] != null) ...[
+                  Text('E-mail · ${r['confirmation_email']}'),
+                  Text(switch (r['confirmation_email_status']) {
+                    'accepted' => 'Confirmation acceptée pour envoi.',
+                    'failed' => 'Envoi de la confirmation indisponible.',
+                    _ => 'Confirmation e-mail en attente.',
+                  }),
+                  if (r['status'] == 'confirmed' &&
+                      r['confirmation_email_status'] != 'accepted')
+                    OutlinedButton.icon(
+                      onPressed: busy
+                          ? null
+                          : () => perform(
+                              () => widget.store.sendRestaurantConfirmation(
+                                widget.id,
+                              ),
+                            ),
+                      icon: const Icon(Icons.mail_outline),
+                      label: const Text('Envoyer la confirmation'),
+                    ),
+                ],
                 Chip(
                   label: Text(serviceStatuses[r['status']] ?? '${r['status']}'),
                 ),
                 Text('${r['details']}', style: const TextStyle(height: 1.6)),
                 const SizedBox(height: 12),
-                if (r['slot_id'] != null)
+                if (r['starts_at'] != null)
                   Text(
                     '${r['slot_name']} · ${serviceDate(r['starts_at'])} → ${serviceDate(r['ends_at'])} · ${r['units']} personne(s) · ${euros(r['price_cents'] as int)}',
                   ),
+                if (r['dining_table_name'] != null)
+                  Text('Table · ${r['dining_table_name']}'),
                 if (r['due_at'] != null)
                   Text('Horaire souhaité : ${serviceDate(r['due_at'])}'),
                 if (r['reason'] != null) Text('Motif : ${r['reason']}'),
@@ -749,7 +1110,7 @@ class _RecordDetailsState extends State<_RecordDetails> {
                                 await Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (_) => _RecordForm(
+                                    builder: (_) => ServiceRecordForm(
                                       store: widget.store,
                                       kind: r['kind'] as String,
                                       previous: r,
@@ -768,7 +1129,10 @@ class _RecordDetailsState extends State<_RecordDetails> {
                     if (!widget.store.isGuest && !closed) ...[
                       for (final next in switch (r['status']) {
                         'pending' => ['confirmed', 'rejected'],
-                        'confirmed' => ['in_progress', 'cancelled'],
+                        'confirmed' =>
+                          r['kind'] == 'restaurant'
+                              ? ['cancelled']
+                              : ['in_progress', 'cancelled'],
                         'in_progress' => ['completed', 'cancelled'],
                         _ => <String>[],
                       })
@@ -953,7 +1317,7 @@ class _SlotManagementScreenState extends State<SlotManagementScreen> {
 
   Future<void> load() async {
     try {
-      final rows = await widget.store.slots(archived: archived);
+      final rows = await widget.store.slots(kind: 'spa', archived: archived);
       if (mounted) {
         setState(() {
           slots = rows;
@@ -1006,7 +1370,7 @@ class _SlotManagementScreenState extends State<SlotManagementScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Créneaux restaurant et spa')),
+    appBar: AppBar(title: const Text('Créneaux du spa')),
     floatingActionButton: FloatingActionButton.extended(
       onPressed: busy ? null : () => edit(),
       icon: const Icon(Icons.add),
@@ -1100,7 +1464,6 @@ class _SlotFormState extends State<_SlotForm> {
     text: ((widget.previous?['price_cents'] as int? ?? 0) / 100)
         .toStringAsFixed(2),
   );
-  late String kind = widget.previous?['kind'] as String? ?? 'restaurant';
   late DateTime? start = DateTime.tryParse(
         '${widget.previous?['starts_at']}',
       )?.toLocal(),
@@ -1131,7 +1494,7 @@ class _SlotFormState extends State<_SlotForm> {
     try {
       await widget.store.saveSlot(
         previous: widget.previous,
-        kind: kind,
+        kind: 'spa',
         name: name.text,
         start: start!,
         end: end!,
@@ -1162,15 +1525,6 @@ class _SlotFormState extends State<_SlotForm> {
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            DropdownButtonFormField<String>(
-              initialValue: kind,
-              items: [
-                for (final k in ['restaurant', 'spa'])
-                  DropdownMenuItem(value: k, child: Text(serviceKinds[k]!)),
-              ],
-              onChanged: busy ? null : (v) => setState(() => kind = v!),
-            ),
-            const SizedBox(height: 16),
             TextFormField(
               controller: name,
               maxLength: 100,
