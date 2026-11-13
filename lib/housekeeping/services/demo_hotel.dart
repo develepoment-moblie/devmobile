@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 
 import '../../shared/models/app_user.dart';
@@ -131,6 +132,53 @@ class _ActingAs implements LocalSessionStore {
 
 const _agents = ['sarah', 'lina', 'youssef'];
 
+/// Real photos for the demo (assets/images/demo_hotel/, sources and
+/// licences in CREDITS.md there). A task photo matches its task: bed,
+/// bathroom, surfaces, amenities. A plain colour stands in when the assets
+/// can't be read (unit tests without a binding).
+class _DemoPhotos {
+  static const _taskKinds = [
+    ('bed', 4),
+    ('bathroom', 4),
+    ('room', 3),
+    ('amenities', 4),
+  ];
+  final Map<String, Uint8List> _bytes;
+  _DemoPhotos(this._bytes);
+
+  static Future<_DemoPhotos> load() async {
+    final bytes = <String, Uint8List>{};
+    final names = [
+      for (final (kind, count) in _taskKinds)
+        for (var i = 1; i <= count; i++) '${kind}_$i',
+      'issue_drain',
+      'lost_watch',
+    ];
+    for (final name in names) {
+      try {
+        final data = await rootBundle.load(
+          'assets/images/demo_hotel/$name.jpg',
+        );
+        bytes[name] = data.buffer.asUint8List(
+          data.offsetInBytes,
+          data.lengthInBytes,
+        );
+      } catch (_) {
+        // Missing asset or no binding: the plain colour is used.
+      }
+    }
+    return _DemoPhotos(bytes);
+  }
+
+  /// Photo for task [task] of a room; [n] varies the picture.
+  Uint8List task(int task, int n) {
+    final (kind, count) = _taskKinds[task % _taskKinds.length];
+    return _bytes['${kind}_${n % count + 1}'] ?? _photo(n);
+  }
+
+  Uint8List named(String name, int n) => _bytes[name] ?? _photo(n);
+}
+
 Uint8List _photo(int n) => Uint8List.fromList(
   img.encodeJpg(
     img.fill(
@@ -219,6 +267,7 @@ Future<String> fillDemoHotel(HousekeepingStore store, {DateTime? now}) async {
   // action re-reads after saving.
   final data = HotelData(api: rules, changes: const Stream.empty());
   var photos = 0;
+  final pictures = await _DemoPhotos.load();
   String? who;
 
   void actAs(String id) {
@@ -365,7 +414,7 @@ Future<String> fillDemoHotel(HousekeepingStore store, {DateTime? now}) async {
     for (var t = 0; t < room(n).tasks.length; t++) {
       if (room(n).checklist[t]) continue;
       later(every);
-      await data.setCheck(room(n), t, true, photo: _photo(photos++));
+      await data.setCheck(room(n), t, true, photo: pictures.task(t, photos++));
     }
   }
 
@@ -485,7 +534,12 @@ Future<String> fillDemoHotel(HousekeepingStore store, {DateTime? now}) async {
   await data.startCleaning(room('202'));
   for (var t = 0; t < room('202').tasks.length; t++) {
     today(64 + t * 6);
-    await data.setCheck(room('202'), t, true, photo: _photo(photos++));
+    await data.setCheck(
+      room('202'),
+      t,
+      true,
+      photo: pictures.task(t, photos++),
+    );
   }
   today(95);
   await data.submitCleaning(room('202'));
@@ -494,15 +548,15 @@ Future<String> fillDemoHotel(HousekeepingStore store, {DateTime? now}) async {
   await as('lina');
   await data.startCleaning(room('302'));
   today(108);
-  await data.setCheck(room('302'), 0, true, photo: _photo(photos++));
+  await data.setCheck(room('302'), 0, true, photo: pictures.task(0, photos++));
   today(114);
-  await data.setCheck(room('302'), 1, true, photo: _photo(photos++));
+  await data.setCheck(room('302'), 1, true, photo: pictures.task(1, photos++));
   // Youssef: 204 in progress, paused for a call.
   today(118);
   await as('youssef');
   await data.startCleaning(room('204'));
   today(126);
-  await data.setCheck(room('204'), 0, true, photo: _photo(photos++));
+  await data.setCheck(room('204'), 0, true, photo: pictures.task(0, photos++));
   today(132);
   await data.pauseTimer(room('204'));
 
@@ -515,7 +569,7 @@ Future<String> fillDemoHotel(HousekeepingStore store, {DateTime? now}) async {
     description: 'The shower drain is blocked, water stays in the tray',
     priority: IssuePriority.high,
     outOfService: false,
-    photos: [_photo(photos++)],
+    photos: [pictures.named('issue_drain', photos++)],
   );
   today(145);
   await as('lina');
@@ -553,7 +607,7 @@ Future<String> fillDemoHotel(HousekeepingStore store, {DateTime? now}) async {
   await data.recordLostItem(
     room('202'),
     'Montre en argent sur la table de nuit',
-    photo: _photo(photos++),
+    photo: pictures.named('lost_watch', photos++),
   );
   await as('lina');
   await data.recordLostItem(room('302'), 'Chargeur de téléphone noir');
