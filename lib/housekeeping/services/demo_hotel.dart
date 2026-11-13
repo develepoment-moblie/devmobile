@@ -34,7 +34,10 @@ import 'sqlite_room_catalog.dart';
 // signed in on the phone, and nothing is queued for the sync server.
 
 /// Build option: fill an empty hotel with the demo data on start.
-const housekeepingDemoData = bool.fromEnvironment('HOUSEKEEPING_DEMO_DATA');
+/// NOVA_DEMO_DATA turns on the demo data of every module at once.
+const housekeepingDemoData =
+    bool.fromEnvironment('HOUSEKEEPING_DEMO_DATA') ||
+    bool.fromEnvironment('NOVA_DEMO_DATA');
 
 // In housekeeping_sync_state (this phone's own table): "started" while the
 // fill runs, "done" once finished. A fill cut off (app closed) is redone.
@@ -491,7 +494,9 @@ Future<String> fillDemoHotel(HousekeepingStore store, {DateTime? now}) async {
   // Guests, as the reservations module tells them.
   today(0);
   const guests = {
-    '101': 'M. Martin',
+    // The test account « Client Démo », the same stay as in reservations
+    // (NP-248190) and guest services.
+    '101': 'Client Démo',
     '201': 'Mme Bernard',
     '202': 'M. et Mme Dubois',
     '301': 'Mme Laurent',
