@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../shared/models/app_user.dart';
@@ -5,6 +7,7 @@ import '../shared/models/nova_module.dart';
 import '../shared/services/app_session.dart';
 import '../shared/services/app_database.dart';
 import 'screens/maintenance_home_screen.dart';
+import 'services/demo_interventions.dart';
 import 'services/maintenance_store.dart';
 
 // Entry point of the Maintenance module. Owner: Ayoub Belgacem.
@@ -34,6 +37,19 @@ class MaintenanceModule extends NovaModule {
 
   @override
   ModuleSchema get schema => maintenanceSchema;
+
+  // Presentation build only (NOVA_DEMO_DATA): demo interventions.
+  @override
+  void attach(AppSession session) {
+    if (!novaDemoData) return;
+    unawaited(
+      fillDemoInterventions(session).then<void>(
+        (_) {},
+        onError: (Object e) =>
+            debugPrint('maintenance: données de démonstration ($e)'),
+      ),
+    );
+  }
 
   @override
   Widget buildHome(BuildContext context, AppSession session) =>
