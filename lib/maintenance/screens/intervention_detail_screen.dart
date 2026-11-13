@@ -37,10 +37,10 @@ class _InterventionDetailScreenState extends State<InterventionDetailScreen> {
   bool _loading = true;
   bool _busy = false;
 
-  // ----- Traduction de la description (FR <-> EN) -----
-  bool _showEnglish = false; // true = on affiche la version anglaise
+  // ----- Traduction de la description (langue détectée) -----
+  bool _showTranslation = false; // true = on affiche la traduction
   bool _translating = false; // true = appel API en cours
-  String? _descEn; // traduction gardée en mémoire (évite de rappeler l'API)
+  Translation? _translation; // gardée en mémoire (évite de rappeler l'API)
 
   AppUser? get _me => widget.session.user;
   String? get _myId => _me?.id;
@@ -90,31 +90,36 @@ class _InterventionDetailScreenState extends State<InterventionDetailScreen> {
     }
   }
 
-  /// 1er clic : traduit (appel API) et remplace le texte affiché.
-  /// Clic suivant : revient à l'original, puis rebascule sans nouvel appel.
-  /// Le texte stocké en base n'est jamais modifié.
+  /// 1er clic : traduit (appel API) et remplace le texte affiché : en
+  /// français s'il est dans une autre langue, en anglais s'il est en
+  /// français. Clic suivant : revient à l'original, puis rebascule sans
+  /// nouvel appel. Le texte stocké en base n'est jamais modifié.
   Future<void> _toggleTranslation(String original) async {
     if (_translating) return;
 
-    if (_showEnglish) {
-      setState(() => _showEnglish = false);
+    if (_showTranslation) {
+      setState(() => _showTranslation = false);
       return;
     }
-    if (_descEn != null) {
-      setState(() => _showEnglish = true);
+    if (_translation != null) {
+      setState(() => _showTranslation = true);
       return;
     }
 
     setState(() => _translating = true);
     try {
-      final en = await TranslationService.toEnglish(original);
+      final translation = await TranslationService.translate(original);
       if (!mounted) return;
       setState(() {
-        _descEn = en;
-        _showEnglish = true;
+        _translation = translation;
+        _showTranslation = true;
       });
-    } catch (_) {
-      _snack('Traduction impossible. Vérifiez votre connexion.');
+    } on TranslationException catch (e) {
+      debugPrint('maintenance: traduction impossible ($e)');
+      _snack(e.message);
+    } catch (e) {
+      debugPrint('maintenance: traduction impossible ($e)');
+      _snack('Traduction impossible ($e).');
     } finally {
       if (mounted) setState(() => _translating = false);
     }
@@ -327,9 +332,19 @@ class _InterventionDetailScreenState extends State<InterventionDetailScreen> {
         Text('Description', style: mt(15, weight: FontWeight.w700)),
         const SizedBox(height: 8),
         Text(
-          _showEnglish && _descEn != null ? _descEn! : i.description,
+          _showTranslation && _translation != null
+              ? _translation!.text
+              : i.description,
           style: mt(13, color: MC.text, height: 1.4),
         ),
+        if (_showTranslation && _translation != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              'Traduction automatique (${_translation!.label})',
+              style: mt(11, color: MC.muted),
+            ),
+          ),
         const SizedBox(height: 6),
         TextButton.icon(
           onPressed: _translating
@@ -353,9 +368,7 @@ class _InterventionDetailScreenState extends State<InterventionDetailScreen> {
           label: Text(
             _translating
                 ? 'Traduction...'
-                : (_showEnglish
-                      ? "Voir l'original (français)"
-                      : 'Traduire en anglais'),
+                : (_showTranslation ? "Voir l'original" : 'Traduire'),
             style: mt(12, weight: FontWeight.w700, color: MC.terra),
           ),
         ),
