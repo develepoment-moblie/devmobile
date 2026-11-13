@@ -21,12 +21,9 @@ class SyncBadge extends StatelessWidget {
     if (view == null || view.server == null || sync.phase == SyncPhase.off) {
       return null;
     }
+    // Conflicts resolve themselves: only the actions waiting are shown.
     final pending = view.pending;
-    final issues = view.conflicts.length + view.rejected.length;
-    final extra = [
-      if (pending > 0) pendingText(pending),
-      if (issues > 0) conflictText(issues),
-    ];
+    final extra = [if (pending > 0) pendingText(pending)];
     String label(String head) => [head, ...extra].join(' · ');
     return switch (sync.phase) {
       SyncPhase.offline => (
@@ -41,9 +38,9 @@ class SyncBadge extends StatelessWidget {
         AppColors.primary,
         AppColors.grayLight,
       ),
-      _ when pending > 0 || issues > 0 => (
+      _ when pending > 0 => (
         extra.join(' · '),
-        issues > 0 ? Icons.call_split : Icons.outbox_outlined,
+        Icons.outbox_outlined,
         AppColors.orange,
         AppColors.orangeLight,
       ),

@@ -1,10 +1,25 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:math';
 
 import 'package:sqlite3/sqlite3.dart';
 
 // The server's whole state: the actions of every phone, numbered in the order
 // they arrived (seq). The business rules stay on the phones, which replay
 // these actions through them; the server only collects and hands them out.
+
+/// A random version 4 UUID.
+String newUuid() {
+  final random = Random.secure();
+  final bytes = [for (var i = 0; i < 16; i++) random.nextInt(256)];
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  final hex = [for (final b in bytes) b.toRadixString(16).padLeft(2, '0')];
+  return '${hex.sublist(0, 4).join()}-${hex.sublist(4, 6).join()}-'
+      '${hex.sublist(6, 8).join()}-${hex.sublist(8, 10).join()}-'
+      '${hex.sublist(10).join()}';
+}
 
 final _uuid = RegExp(
   r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
@@ -30,7 +45,29 @@ class SyncLog {
       actor_id TEXT NOT NULL,
       applied_at TEXT NOT NULL,
       received_at TEXT NOT NULL)''');
+    // This server's id, made once: the phones recognise it when its
+    // address changes (see discovery.dart).
+    db.execute('''CREATE TABLE IF NOT EXISTS sync_server (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL)''');
+    db.execute(
+      "INSERT OR IGNORE INTO sync_server (key, value) VALUES ('server_id', ?)",
+      [newUuid()],
+    );
+    // The hotel's data at one action number, sent by a phone: a phone that
+    // joins starts from it instead of an empty hotel. One row, the latest.
+    db.execute('''CREATE TABLE IF NOT EXISTS sync_snapshot (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      seq INTEGER NOT NULL, device_id TEXT NOT NULL, data BLOB NOT NULL,
+      received_at TEXT NOT NULL)''');
+    serverId =
+        db
+                .select("SELECT value FROM sync_server WHERE key = 'server_id'")
+                .first['value']
+            as String;
   }
+
+  /// Stays the same as long as the log file is kept.
+  late final String serverId;
 
   /// A log in a file (created if needed).
   factory SyncLog.file(String path) => SyncLog(sqlite3.open(path));
@@ -39,7 +76,50 @@ class SyncLog {
   factory SyncLog.memory({DateTime Function()? clock}) =>
       SyncLog(sqlite3.openInMemory(), clock: clock);
 
-  void close() => db.close();
+  // Told after each push that stored something: the phones waiting in
+  // [waitForMore] answer at once.
+  final _arrivals = StreamController<void>.broadcast();
+
+  void close() {
+    _arrivals.close();
+    db.close();
+  }
+
+  /// Returns as soon as there is an action after [since], or after [max].
+  Future<void> waitForMore(int since, Duration max) async {
+    if (lastSeq > since) return;
+    await _arrivals.stream.first.timeout(max, onTimeout: () {});
+  }
+
+  /// Keeps [data] (the phone's confirmed data at [seq], gzip) when it is
+  /// newer than the one kept and [seq] is a number this server gave.
+  bool saveSnapshot(int seq, String deviceId, Uint8List data) {
+    if (seq < 1 || seq > lastSeq) return false;
+    final current = snapshotSeq;
+    if (current != null && current >= seq) return false;
+    db.execute(
+      'INSERT OR REPLACE INTO sync_snapshot '
+      '(id, seq, device_id, data, received_at) VALUES (1, ?, ?, ?, ?)',
+      [seq, deviceId, data, clock().toIso8601String()],
+    );
+    return true;
+  }
+
+  int? get snapshotSeq =>
+      db
+              .select('SELECT seq FROM sync_snapshot WHERE id = 1')
+              .firstOrNull?['seq']
+          as int?;
+
+  /// The latest snapshot, or null.
+  ({int seq, Uint8List data})? snapshot() {
+    final row = db
+        .select('SELECT seq, data FROM sync_snapshot WHERE id = 1')
+        .firstOrNull;
+    return row == null
+        ? null
+        : (seq: row['seq'] as int, data: row['data'] as Uint8List);
+  }
 
   int get count =>
       db.select('SELECT COUNT(*) AS n FROM sync_mutations').first['n'] as int;
@@ -112,6 +192,7 @@ class SyncLog {
         }
       }
       db.execute('COMMIT');
+      if (results.any((r) => r['status'] == 'applied')) _arrivals.add(null);
     } catch (_) {
       db.execute('ROLLBACK');
       rethrow;

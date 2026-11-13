@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nova_paris/housekeeping/screens/sync_screen.dart';
 import 'package:nova_paris/housekeeping/services/housekeeping_store.dart';
 import 'package:nova_paris/housekeeping/services/housekeeping_sync.dart';
+import 'package:nova_paris/housekeeping/services/server_discovery.dart';
 import 'package:nova_paris/shared/custom/app_theme.dart';
 import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_session.dart';
@@ -12,7 +13,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'housekeeping_store_test.dart' show TestStaff;
-import 'sync_test.dart' show FakeHotelServer;
+import 'sync_test.dart' show FakeDiscovery, FakeHotelServer;
 import 'test_backends.dart';
 
 // The Synchronisation screen on a real database, with an in-memory server.
@@ -22,6 +23,7 @@ void main() {
   late HousekeepingStore store;
   late HousekeepingSync sync;
   late FakeHotelServer server;
+  late FakeDiscovery wifi;
   setUpAll(sqfliteFfiInit);
   setUp(() async {
     directory = await Directory.systemTemp.createTemp('nova_sync_screen_');
@@ -34,11 +36,13 @@ void main() {
       ..signIn(TestStaff.people.firstWhere((u) => u.id == 'amina'));
     store = HousekeepingStore(session);
     server = FakeHotelServer();
+    wifi = FakeDiscovery();
     sync = HousekeepingSync(
       store,
       client: server.client,
       background: false,
       timeout: const Duration(milliseconds: 200),
+      discovery: wifi,
     );
   });
   tearDown(() async {
@@ -72,7 +76,7 @@ void main() {
     addTearDown(() => tester.pumpWidget(const SizedBox()));
   }
 
-  testWidgets('set the server, test it, sync and clear a conflict', (
+  testWidgets('set the server, test it, sync: conflicts resolve themselves', (
     tester,
   ) async {
     await open(tester);
@@ -96,6 +100,7 @@ void main() {
     expect(find.text('Aucune action en attente'), findsOneWidget);
     expect(find.text('Jamais synchronisé'), findsOneWidget);
     expect(find.text('Aucun conflit'), findsOneWidget);
+    expect(find.text('Résolu automatiquement'), findsOneWidget);
 
     // Another phone's agent tried to create stock: refused here.
     server.inject('/v1/supplies/new/create', 'sarah', {
@@ -107,19 +112,88 @@ void main() {
     });
     await tester.tap(find.text('Synchroniser'));
     await settleUntil(tester, find.text('Stock · création'));
-    expect(find.text('Conflits · 1'), findsOneWidget);
-    expect(find.text('Actions d’autres téléphones refusées'), findsOneWidget);
-    expect(find.text('Vos actions refusées'), findsNothing);
+    // Cancelled by itself, on every phone: nothing to click.
+    expect(find.textContaining('Annulée · Sarah · '), findsOneWidget);
     expect(
       find.textContaining('Stock réservé à la gouvernante.'),
       findsOneWidget,
     );
+    expect(find.byIcon(Icons.close), findsNothing);
+    expect(find.text('Aucun conflit'), findsNothing);
     expect(find.textContaining('Dernière synchronisation'), findsOneWidget);
+    expect(find.text('Synchronisé'), findsOneWidget, reason: 'badge');
+  });
 
-    await tester.tap(
-      find.byTooltip('Retirer « Stock · création » de la liste'),
+  testWidgets('a server found on the Wi-Fi is used with one tap', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await open(tester);
+    expect(find.text('Serveurs trouvés sur le Wi-Fi'), findsOneWidget);
+    expect(find.text('Recherche d’un serveur sur le Wi-Fi…'), findsOneWidget);
+
+    server.host = '192.168.1.11';
+    wifi.announce(
+      FoundServer(
+        id: server.serverId,
+        name: 'PC-ACCUEIL',
+        address: Uri.parse('http://192.168.1.11:8080'),
+      ),
     );
-    await settleUntil(tester, find.text('Aucun conflit'));
+    await settleUntil(tester, find.text('PC-ACCUEIL'));
+    expect(find.text('192.168.1.11:8080'), findsOneWidget);
+    expect(find.text('Recherche d’un serveur sur le Wi-Fi…'), findsNothing);
+    expect(
+      find.bySemanticsLabel(RegExp('Utiliser le serveur PC-ACCUEIL')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Utiliser'));
+    await settleUntil(tester, find.text('Rejoindre ce serveur ?'));
+    await tester.tap(find.text('Rejoindre'));
+    await settleUntil(tester, find.text('Serveur enregistré'));
+    await settleUntil(tester, find.text('Utilisé'));
+    expect(find.text('État'), findsOneWidget);
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.controller!.text, '192.168.1.11:8080');
+    expect(sync.overview!.server, Uri.parse('http://192.168.1.11:8080'));
+    semantics.dispose();
+  });
+
+  testWidgets('broadcasts dropped: the scan finds the server', (tester) async {
+    server.host = '192.168.1.11';
+    wifi.open.add('192.168.1.11:8080');
+    await open(tester);
+    await settleUntil(tester, find.text('PC-ACCUEIL'));
+    expect(find.text('192.168.1.11:8080'), findsOneWidget);
+    await tester.tap(find.text('Utiliser'));
+    await settleUntil(tester, find.text('Rejoindre ce serveur ?'));
+    await tester.tap(find.text('Rejoindre'));
+    await settleUntil(tester, find.text('Serveur enregistré'));
+    await settleUntil(tester, find.text('Utilisé'));
+  });
+
+  testWidgets('nothing found: typing the address is offered', (tester) async {
+    await open(tester);
+    // Let the first read of the database finish (real time), then jump
+    // past the 10 seconds of listening.
+    await tester.runAsync(
+      () => Future.delayed(const Duration(milliseconds: 300)),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 11));
+    expect(
+      find.text('Aucun serveur trouvé. Saisissez l’adresse ci-dessous.'),
+      findsOneWidget,
+    );
+    expect(find.text('Utiliser'), findsNothing);
+
+    // The server is started afterwards: searching again finds it.
+    server.host = '192.168.1.11';
+    wifi.open.add('192.168.1.11:8080');
+    await tester.tap(find.text('Rechercher de nouveau'));
+    await settleUntil(tester, find.text('PC-ACCUEIL'));
+    expect(find.text('Rechercher de nouveau'), findsNothing);
   });
 
   testWidgets('offline: the badge counts the actions waiting', (tester) async {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../shared/custom/animations.dart';
@@ -6,9 +8,11 @@ import '../custom/busy_action.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../custom/sync_badge.dart';
 import '../services/housekeeping_sync.dart';
+import '../services/server_discovery.dart';
 
-// "Synchronisation" (supervisor and Manager): the hotel server's address,
-// the actions waiting to be sent, the last sync and the conflicts.
+// "Synchronisation" (supervisor and Manager): the servers found on the Wi-Fi
+// (one tap to use one), the hotel server's address, the actions waiting to
+// be sent, the last sync and the conflicts.
 class SyncScreen extends StatefulWidget {
   final HousekeepingSync sync;
   const SyncScreen({super.key, required this.sync});
@@ -21,36 +25,75 @@ class _SyncScreenState extends State<SyncScreen>
   final address = TextEditingController();
   String? check;
 
+  /// Servers found on the Wi-Fi while the screen is open, by id.
+  final found = <String, FoundServer>{};
+  StreamSubscription<FoundServer>? _listening, _scan;
+  Timer? _searching;
+
+  /// Listened long enough to say nothing was found.
+  bool searched = false;
+
+  /// The scan of the network is running.
+  bool scanning = false;
+
   @override
   Listenable get listenable => widget.sync;
 
   @override
   void initState() {
     super.initState();
-    widget.sync.refresh().then((view) {
-      if (mounted && address.text.isEmpty && view.server != null) {
-        address.text = '${view.server!.host}:${view.server!.port}';
-      }
-    }, onError: (Object e) => setState(() => error = e.toString()));
+    final discovery = widget.sync.discovery;
+    widget.sync
+        .refresh()
+        .then((view) {
+          if (mounted && address.text.isEmpty && view.server != null) {
+            address.text = '${view.server!.host}:${view.server!.port}';
+          }
+        }, onError: (Object e) => setState(() => error = e.toString()))
+        // The scan tries the saved server's port too: read it first.
+        .whenComplete(() {
+          if (mounted && discovery != null) _search();
+        });
+    if (discovery != null) _listening = discovery.watch().listen(_heard);
+  }
+
+  void _heard(FoundServer server) {
+    if (mounted && found[server.id] != server) {
+      setState(() => found[server.id] = server);
+    }
+  }
+
+  /// Scans the network (the announcements are listened to all along).
+  void _search() {
+    _scan?.cancel();
+    _searching?.cancel();
+    setState(() {
+      scanning = true;
+      searched = false;
+    });
+    void done() {
+      if (mounted) setState(() => scanning = false);
+    }
+
+    _scan = widget.sync.scanNetwork().listen(
+      _heard,
+      onDone: done,
+      onError: (Object _) => done(),
+    );
+    // The server announces itself every 2 seconds.
+    _searching = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() => searched = true);
+    });
   }
 
   @override
   void dispose() {
+    _listening?.cancel();
+    _scan?.cancel();
+    _searching?.cancel();
     address.dispose();
     super.dispose();
   }
-
-  Widget _conflict(SyncConflict c) => _ConflictCard(
-    title: c.label,
-    subtitle:
-        '${c.actorName ?? 'Auteur inconnu'} · ${shortDate(c.appliedAt)}\n${c.message}',
-    onDismiss: busy
-        ? null
-        : () => run(
-            () => widget.sync.dismissConflict(c.mutationId),
-            'Conflit retiré',
-          ),
-  );
 
   Future<void> _test() => run(() async {
     setState(() => check = null);
@@ -58,13 +101,28 @@ class _SyncScreenState extends State<SyncScreen>
     if (mounted) setState(() => check = message);
   }, 'Connexion réussie');
 
+  Future<void> _use(FoundServer server) async {
+    // A server this phone never synced with brings the hotel's data.
+    if (widget.sync.joins(server) &&
+        !await confirm(
+          'Rejoindre ce serveur ?',
+          'Les données « ménage » de ce téléphone seront remplacées par celles de l’hôtel enregistrées sur le serveur, s’il en a une copie. Une sauvegarde est faite avant.',
+          'Rejoindre',
+        )) {
+      return;
+    }
+    await run(() async {
+      setState(() => check = null);
+      await widget.sync.useFoundServer(server);
+      if (mounted) address.text = server.hostPort;
+    }, 'Serveur enregistré');
+  }
+
   @override
   Widget build(BuildContext context) {
     final sync = widget.sync;
     final view = sync.overview;
     final configured = view?.server != null;
-    final own = [...?view?.conflicts.where((c) => c.own)];
-    final others = [...?view?.conflicts.where((c) => !c.own)];
     return Scaffold(
       appBar: AppBar(title: const Text('Synchronisation')),
       body: ListView(
@@ -75,6 +133,39 @@ class _SyncScreenState extends State<SyncScreen>
             style: TextStyle(color: AppColors.muted, fontSize: 12.5),
           ),
           const SizedBox(height: 16),
+          if (sync.discovery != null) ...[
+            const _Heading(
+              'Serveurs trouvés sur le Wi-Fi',
+              'Le téléphone cherche le serveur de l’hôtel sur ce réseau.',
+            ),
+            if (found.isEmpty)
+              _Line(
+                Icons.wifi_find,
+                scanning || !searched
+                    ? 'Recherche d’un serveur sur le Wi-Fi…'
+                    : 'Aucun serveur trouvé. Saisissez l’adresse ci-dessous.',
+                AppColors.muted,
+              ),
+            for (final server in found.values)
+              _FoundCard(
+                key: ValueKey(server.id),
+                server: server,
+                inUse:
+                    view?.server == server.address &&
+                    view?.serverId == server.id,
+                onUse: busy ? null : () => _use(server),
+              ),
+            if (!scanning && searched)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: busy ? null : _search,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Rechercher de nouveau'),
+                ),
+              ),
+            const SizedBox(height: 14),
+          ],
           TextField(
             controller: address,
             keyboardType: TextInputType.url,
@@ -191,7 +282,7 @@ class _SyncScreenState extends State<SyncScreen>
                         : () => run(() async {
                             final ok = await confirm(
                               'Arrêter la synchronisation ?',
-                              'Les actions restent sur ce téléphone et seront envoyées quand un serveur sera de nouveau enregistré.',
+                              'Les actions restent sur ce téléphone et seront envoyées quand un serveur sera de nouveau enregistré. Le téléphone ne se reconnectera plus tout seul.',
                               'Arrêter',
                             );
                             if (ok) await sync.clearServer();
@@ -202,55 +293,22 @@ class _SyncScreenState extends State<SyncScreen>
               ],
             ),
             const SizedBox(height: 22),
-            Text(
-              view.conflicts.isEmpty && view.rejected.isEmpty
-                  ? 'Conflits'
-                  : 'Conflits · ${view.conflicts.length + view.rejected.length}',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            const _Heading(
+              'Résolu automatiquement',
+              'Quand deux téléphones changent la même chose, l’ordre d’arrivée au serveur décide : l’action en retard est appliquée sur la dernière version, ou annulée sur tous les téléphones si elle n’est plus possible. Rien à faire.',
             ),
-            const SizedBox(height: 8),
-            if (view.conflicts.isEmpty && view.rejected.isEmpty)
+            const SizedBox(height: 4),
+            if (view.conflicts.isEmpty)
               const EmptyState(
                 'Aucun conflit',
-                'Quand deux téléphones changent la même chose, l’ordre d’arrivée au serveur décide. Une action refusée apparaîtra ici, sur tous les téléphones.',
+                'Les conflits résolus apparaîtront ici, sur tous les téléphones.',
               ),
-            if (own.isNotEmpty || view.rejected.isNotEmpty) ...[
-              const _Heading(
-                'Vos actions refusées',
-                'Retirées de ce téléphone : refaites-les si besoin.',
+            for (final (i, c) in view.conflicts.indexed)
+              FadeSlideIn(
+                key: ValueKey(c.mutationId),
+                index: i,
+                child: _LogCard(entry: c),
               ),
-              for (final (i, c) in own.indexed)
-                FadeSlideIn(
-                  key: ValueKey(c.mutationId),
-                  index: i,
-                  child: _conflict(c),
-                ),
-              for (final r in view.rejected)
-                _ConflictCard(
-                  key: ValueKey(r.mutationId),
-                  title: r.label,
-                  subtitle:
-                      'Refusée par le serveur · ${shortDate(r.appliedAt)}\n${r.error}',
-                  onDismiss: busy
-                      ? null
-                      : () => run(
-                          () => sync.dismissRejected(r.mutationId),
-                          'Action retirée',
-                        ),
-                ),
-            ],
-            if (others.isNotEmpty) ...[
-              const _Heading(
-                'Actions d’autres téléphones refusées',
-                'Arrivées au serveur après une autre modification.',
-              ),
-              for (final (i, c) in others.indexed)
-                FadeSlideIn(
-                  key: ValueKey(c.mutationId),
-                  index: i,
-                  child: _conflict(c),
-                ),
-            ],
           ],
         ],
       ),
@@ -300,29 +358,68 @@ class _Line extends StatelessWidget {
   );
 }
 
-class _ConflictCard extends StatelessWidget {
-  final String title, subtitle;
-  final VoidCallback? onDismiss;
-  const _ConflictCard({
+class _FoundCard extends StatelessWidget {
+  final FoundServer server;
+  final bool inUse;
+  final VoidCallback? onUse;
+  const _FoundCard({
     super.key,
-    required this.title,
-    required this.subtitle,
-    required this.onDismiss,
+    required this.server,
+    required this.inUse,
+    required this.onUse,
   });
   @override
   Widget build(BuildContext context) => Card(
     color: Colors.white,
     elevation: 0,
     child: ListTile(
-      leading: const Icon(Icons.call_split, color: AppColors.orange),
-      title: Text(title),
-      subtitle: Text(subtitle),
-      isThreeLine: true,
-      trailing: IconButton(
-        tooltip: 'Retirer « $title » de la liste',
-        onPressed: onDismiss,
-        icon: const Icon(Icons.close),
-      ),
+      leading: const Icon(Icons.dns_outlined, color: AppColors.muted),
+      title: Text(server.name),
+      subtitle: Text(server.hostPort),
+      trailing: inUse
+          ? const Text(
+              'Utilisé',
+              style: TextStyle(
+                color: AppColors.green,
+                fontWeight: FontWeight.w600,
+              ),
+            )
+          : Semantics(
+              label: 'Utiliser le serveur ${server.name}',
+              excludeSemantics: true,
+              button: true,
+              child: TextButton(
+                onPressed: onUse,
+                child: const Text('Utiliser'),
+              ),
+            ),
     ),
   );
+}
+
+class _LogCard extends StatelessWidget {
+  final SyncConflict entry;
+  const _LogCard({required this.entry});
+  @override
+  Widget build(BuildContext context) {
+    final who = [
+      entry.actorName ?? 'Auteur inconnu',
+      if (entry.own) 'ce téléphone',
+    ].join(', ');
+    return Card(
+      color: Colors.white,
+      elevation: 0,
+      child: ListTile(
+        leading: Icon(
+          entry.merged ? Icons.merge_type : Icons.block,
+          color: entry.merged ? AppColors.green : AppColors.orange,
+        ),
+        title: Text(entry.label),
+        subtitle: Text(
+          '${entry.merged ? 'Fusionnée' : 'Annulée'} · $who · ${shortDate(entry.appliedAt)}\n${entry.message}',
+        ),
+        isThreeLine: true,
+      ),
+    );
+  }
 }

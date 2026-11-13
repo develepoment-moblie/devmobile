@@ -141,24 +141,68 @@ d’abord : chaque action est enregistrée sur le téléphone, puis envoyée.
   `mutation_meta.dart`) ; rejouée ailleurs, elle crée les mêmes lignes.
 - **Sans doublon** : un `mutationId` déjà appliqué ne change rien, sur le
   téléphone comme sur le serveur ; réessayer est donc sans risque.
-- **Conflits** : une action que les règles refusent dans l’ordre du serveur
-  (par exemple une version dépassée, 409) est refusée sur tous les
-  téléphones. Celle de ce téléphone disparaît de ses écrans et s’affiche dans
-  « Vos actions refusées » ; celle d’un autre dans « Actions d’autres
-  téléphones refusées » (`housekeeping_sync_conflicts`).
+- **Conflits résolus tout seuls** (`sync_rebase.dart`, même décision sur
+  tous les téléphones) :
+  1. l’élément a changé entre-temps (version dépassée, 409) : l’action est
+     appliquée de nouveau sur sa dernière version ; si les règles
+     l’acceptent, elle passe (« Fusionnée ») : sur le même champ, la dernière
+     arrivée au serveur l’emporte, sur des champs différents les deux
+     restent (par exemple deux agents qui cochent la liste d’une chambre) ;
+  2. l’action n’est plus possible (chambre déjà validée, stock vide, droits) :
+     elle est annulée sur tous les téléphones (« Annulée »).
+  Rien à faire : l’écran « Synchronisation » les montre dans « Résolu
+  automatiquement » (`housekeeping_sync_conflicts`, colonne `resolution`,
+  20 dernières sur 7 jours). Une action que le serveur refuse (mal formée)
+  y est annulée aussi.
 - **Règles locales** : les événements des autres modules, l’archivage des
   objets trouvés et l’alerte de retard s’appliquent aux deux versions, dans
   la même transaction (`HousekeepingStore.localChange`), pour qu’une
   reconstruction ne les perde pas.
-- **Quand** : au démarrage, 2 s après chaque modification, toutes les 20 s,
-  et sur « Synchroniser ». Sans réseau : nouvel essai après 5 s, 10 s, 20 s…
+- **En direct** : tant que l’application tourne, une requête attend au
+  serveur (`GET /v1/sync/pull?wait=25`), qui répond dès qu’un autre téléphone
+  envoie quelque chose : son travail apparaît ici en moins d’une seconde.
+  Envoi 0,5 s après chaque modification, au démarrage, au retour de
+  l’application à l’écran, toutes les 20 s par sécurité et sur
+  « Synchroniser ». Sans réseau : nouvel essai après 5 s, 10 s, 20 s…
   jusqu’à 5 min.
-- **Écran** « Synchronisation » (gouvernante et Manager) : adresse du serveur,
-  « Tester la connexion », actions en attente, dernière synchronisation,
-  conflits. Pastille « Synchronisé / Hors ligne · n actions en attente » sous
+- **Connexion toute seule** : sans serveur enregistré, le téléphone (quel que
+  soit le compte, agents compris) cherche au démarrage puis toutes les 30 s ;
+  s’il trouve **un seul** serveur Nova Paris, il s’y connecte. Plusieurs :
+  le Manager choisit. « Arrêter » coupe aussi cette connexion automatique.
+  Seule la base de l’hôtel (`nova_paris_hotel.db`) le fait, jamais la
+  visite d’écrans ni un test.
+- **Rejoindre un serveur** : les téléphones envoient au serveur une copie de
+  leur version confirmée (`PUT /v1/sync/snapshot`, gzip, photos comprises)
+  quand la sienne manque ou a 100 actions de retard. Un téléphone qui se
+  connecte pour la première fois à un serveur (identifiant inconnu) fait une
+  sauvegarde (« -avant-serveur »), prend cette copie comme données « ménage »
+  (version confirmée comprise), puis reçoit les actions suivantes ; ses
+  actions en attente sont rejouées par-dessus et renvoyées. Le Manager
+  confirme avant (« Rejoindre ce serveur ? ») ; la connexion automatique ne
+  demande pas. Sans copie sur le serveur, le téléphone garde ses données.
+- **Écran** « Synchronisation » (gouvernante et Manager) : serveurs trouvés
+  sur le Wi-Fi (« Utiliser »), adresse du serveur, « Tester la connexion »,
+  actions en attente, dernière synchronisation, « Résolu automatiquement ». Pastille « Synchronisé / Hors ligne · n actions en attente » sous
   l’en-tête pour tous.
 - **Adresse** : HTTP seulement pour une adresse du réseau local (10.x,
   172.16-31.x, 192.168.x, localhost), sinon HTTPS.
+- **Découverte sur le Wi-Fi** (`services/server_discovery.dart`) : le serveur
+  s’annonce toutes les 2 s en UDP (port 45454) avec son identifiant. L’écran
+  « Synchronisation » écoute tant qu’il est ouvert et propose les serveurs
+  entendus ; un appui les enregistre, après vérification de l’identifiant
+  par `GET /v1/health`. L’adresse retenue est celle d’où vient l’annonce
+  (jamais une adresse écrite dedans), et elle doit être du réseau local.
+  L’identifiant du serveur est gardé dans `housekeeping_sync_state`
+  (`server_id`). Beaucoup de téléphones et de box suppriment ces annonces
+  (constaté sur le Xiaomi) : le téléphone parcourt donc aussi son réseau
+  (x.y.z.1 à .254, port 8080 et port du serveur enregistré, environ 2 s) et
+  demande `GET /v1/health` là où le port répond ; bouton « Rechercher de
+  nouveau ». Si le serveur ne répond plus, le téléphone écoute 3 s et
+  parcourt le réseau : le même serveur (même identifiant, vérifié) à une
+  autre adresse est suivi
+  automatiquement et la synchronisation reprend là où elle en était ; un
+  autre serveur n’est jamais suivi. Saisir l’adresse reste possible (Wi-Fi
+  qui bloque les annonces, émulateur : `10.0.2.2:8080`).
 - **Sauvegardes** : les tables `housekeeping_sync_*` appartiennent au
   téléphone ; une sauvegarde ne les contient pas. Une restauration vide la
   file ; les données restaurées deviennent la version confirmée et la liste
@@ -240,6 +284,7 @@ services/
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
   housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
+  server_discovery.dart         serveur de l’hôtel trouvé sur le Wi-Fi (annonces UDP, parcours du réseau)
   http_guard.dart               appels web : délai, absence de réseau, réponse JSON
   demo_hotel.dart               hôtel de démonstration (option de compilation)
   product_lookup.dart           fiche produit depuis un code-barres (Open Beauty / Food Facts)

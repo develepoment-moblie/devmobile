@@ -18,6 +18,9 @@ final _stores = Expando<HousekeepingStore>('housekeeping store');
 HousekeepingStore housekeepingStoreFor(AppSession session) =>
     _stores[session] ??= HousekeepingStore(session);
 
+// One listener per store: the sync resumes when the app comes back.
+final _resume = Expando<AppLifecycleListener>('housekeeping resume');
+
 // Entry point of the Chambres et ménage module. Owner: jassernoomani.
 // Everything for this module lives in lib/housekeeping/. See lib/housekeeping/README.md.
 class HousekeepingModule extends NovaModule {
@@ -64,8 +67,14 @@ class HousekeepingModule extends NovaModule {
         ),
       );
     }
+    final sync = housekeepingSyncFor(store);
+    // Back on the screen: sync at once (the live request may have been cut
+    // while the app was in the background).
+    _resume[store] ??= AppLifecycleListener(
+      onResume: () => unawaited(sync.resumed()),
+    );
     unawaited(
-      housekeepingSyncFor(store).start().then<void>(
+      sync.start().then<void>(
         (_) {},
         onError: (Object e) =>
             debugPrint('housekeeping: synchronisation non démarrée ($e)'),
