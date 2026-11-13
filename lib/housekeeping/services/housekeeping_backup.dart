@@ -165,6 +165,11 @@ class HousekeepingBackup {
     return _write(user.fullName);
   }
 
+  /// Made by the sync before this phone takes the server's copy of the
+  /// data (whoever is signed in): an automatic backup to go back to.
+  Future<BackupInfo> backupBeforeJoin() =>
+      _write('Avant la synchronisation', suffix: '-avant-serveur');
+
   /// The backups in the app's folder, newest first.
   Future<List<BackupInfo>> list() async {
     final found = <BackupInfo>[];

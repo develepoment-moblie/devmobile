@@ -245,7 +245,7 @@ void main() {
       final old = await backup.backupNow();
       await session.database.close();
       await open();
-      expect(await session.database.versionOf('housekeeping'), 9);
+      expect(await session.database.versionOf('housekeeping'), 10);
       login('amina');
       await act('118', 'assign', {
         'employeeId': 'lina',
@@ -254,7 +254,7 @@ void main() {
       });
       login('manager');
       await backup.restore(await backup.readFile(old.path));
-      expect(await session.database.versionOf('housekeeping'), 9);
+      expect(await session.database.versionOf('housekeeping'), 10);
       expect((await room('305'))['note'], 'Ancienne');
       expect((await room('118'))['employeeId'], isNull);
       login('sarah');

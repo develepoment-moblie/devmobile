@@ -1,8 +1,15 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+/// Turns a version 10 database back into version 9: conflicts are not
+/// resolved by themselves (no "resolution").
+Future<void> dropVersion10(Database db) => db.execute(
+  'ALTER TABLE housekeeping_sync_conflicts DROP COLUMN resolution',
+);
+
 /// Turns a version 9 database back into version 8: no confirmed version,
 /// no "sent" status, no "own" flag on conflicts.
 Future<void> dropVersion9(Database db) async {
+  await dropVersion10(db);
   await db.execute('DROP TABLE housekeeping_sync_base');
   await db.execute('DROP TABLE housekeeping_sync_outbox');
   await db.execute('''CREATE TABLE housekeeping_sync_outbox (

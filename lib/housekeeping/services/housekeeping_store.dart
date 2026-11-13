@@ -20,7 +20,7 @@ import 'notification_rules.dart';
 // step to [migrate] for every change; never edit a step already pushed.
 final housekeepingSchema = ModuleSchema(
   module: 'housekeeping',
-  version: 9,
+  version: 10,
   migrate: (tx, from, to) async {
     if (from < 1) {
       await tx.execute('''CREATE TABLE housekeeping_rooms (
@@ -367,6 +367,29 @@ final housekeepingSchema = ModuleSchema(
           'ADD COLUMN own INTEGER NOT NULL DEFAULT 0',
         );
       }
+    }
+    if (from < 10) {
+      // Conflicts resolve themselves (sync_rebase.dart): the list becomes a
+      // log, "merged" (applied on the latest version) or "cancelled".
+      final columns = await tx.rawQuery(
+        'PRAGMA table_info(housekeeping_sync_conflicts)',
+      );
+      if (!columns.any((c) => c['name'] == 'resolution')) {
+        await tx.execute(
+          'ALTER TABLE housekeeping_sync_conflicts '
+          "ADD COLUMN resolution TEXT NOT NULL DEFAULT 'cancelled'",
+        );
+      }
+      // Actions the server refused (malformed) join the log, cancelled.
+      await tx.execute(
+        'INSERT OR REPLACE INTO housekeeping_sync_conflicts '
+        '(mutation_id, seq, path, actor_id, actor_name, applied_at, message, '
+        'status, received_at, own, resolution) '
+        'SELECT mutation_id, 0, path, actor_id, NULL, applied_at, '
+        "COALESCE(last_error, 'Refusée par le serveur.'), 400, created_at, "
+        "1, 'cancelled' FROM housekeeping_sync_outbox WHERE status = 'rejected'",
+      );
+      await tx.delete('housekeeping_sync_outbox', where: "status = 'rejected'");
     }
     // A new install gets its starting data once every table exists.
     if (from < 1) {

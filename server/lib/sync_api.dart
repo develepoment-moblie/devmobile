@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:shelf/shelf.dart';
 
@@ -9,7 +10,12 @@ import 'sync_log.dart';
 //   GET  /v1/health                         is the server up, its id and name,
 //                                           how many actions
 //   POST /v1/sync/push                      a phone sends its queued actions
-//   GET  /v1/sync/pull?since=&limit=       every action after since, in order
+//   GET  /v1/sync/pull?since=&limit=&wait= every action after since, in order;
+//                                           with wait (seconds, up to 30) and
+//                                           nothing new, answers as soon as a
+//                                           phone pushes something
+//   PUT  /v1/sync/snapshot?seq=&device=     a phone's confirmed data (gzip)
+//   GET  /v1/sync/snapshot                  the latest one (x-snapshot-seq)
 //   GET  /v1/rooms/activity                 last action per room (browser)
 //
 // Requests and answers are JSON. A repeated mutationId is answered
@@ -40,6 +46,7 @@ Handler syncApi(SyncLog log, {String name = 'Serveur Nova Paris'}) =>
             'name': name,
             'mutations': log.count,
             'lastSeq': log.lastSeq,
+            'snapshotSeq': log.snapshotSeq,
           });
         }
         if (method == 'GET' && path == '/v1/rooms/activity') {
@@ -55,11 +62,55 @@ Handler syncApi(SyncLog log, {String name = 'Serveur Nova Paris'}) =>
           if (limit == null || limit < 1 || limit > 200) {
             return _error(400, 'limit de 1 à 200.');
           }
+          final wait = int.tryParse(q['wait'] ?? '0');
+          if (wait == null || wait < 0 || wait > 30) {
+            return _error(400, 'wait de 0 à 30.');
+          }
+          if (wait > 0) await log.waitForMore(since, Duration(seconds: wait));
           final page = log.pull(since, limit);
           return _json({
             'mutations': page.mutations,
             'until': page.until,
             'more': page.more,
+          });
+        }
+        if (method == 'GET' && path == '/v1/sync/snapshot') {
+          final snapshot = log.snapshot();
+          if (snapshot == null) return _error(404, 'Aucune copie des données.');
+          return Response.ok(
+            snapshot.data,
+            headers: {
+              'content-type': 'application/gzip',
+              'x-snapshot-seq': '${snapshot.seq}',
+            },
+          );
+        }
+        if (method == 'PUT' && path == '/v1/sync/snapshot') {
+          final q = request.url.queryParameters;
+          final seq = int.tryParse(q['seq'] ?? '');
+          final device = q['device'] ?? '';
+          if (seq == null || device.isEmpty) {
+            return _error(400, 'seq et device requis.');
+          }
+          final length = request.contentLength;
+          if (length != null && length > maxBodyBytes) {
+            return _error(413, 'Envoi trop volumineux.');
+          }
+          final data = BytesBuilder(copy: false);
+          await for (final chunk in request.read()) {
+            data.add(chunk);
+            if (data.length > maxBodyBytes) {
+              return _error(413, 'Envoi trop volumineux.');
+            }
+          }
+          final bytes = data.takeBytes();
+          // gzip only: the phones read it back as such.
+          if (bytes.length < 2 || bytes[0] != 0x1f || bytes[1] != 0x8b) {
+            return _error(400, 'Copie invalide (gzip attendu).');
+          }
+          return _json({
+            'stored': log.saveSnapshot(seq, device, bytes),
+            'snapshotSeq': log.snapshotSeq,
           });
         }
         if (method == 'POST' && path == '/v1/sync/push') {
@@ -93,6 +144,7 @@ Handler syncApi(SyncLog log, {String name = 'Serveur Nova Paris'}) =>
           '/v1/rooms/activity',
           '/v1/sync/pull',
           '/v1/sync/push',
+          '/v1/sync/snapshot',
         }.contains(path)) {
           return _error(405, 'Méthode non autorisée.');
         }

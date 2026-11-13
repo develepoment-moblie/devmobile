@@ -65,6 +65,7 @@ void main() {
         'name': 'Serveur Nova Paris',
         'mutations': 0,
         'lastSeq': 0,
+        'snapshotSeq': null,
       });
       expect(log.serverId, matches(RegExp(r'^[0-9a-f-]{36}$')));
     },

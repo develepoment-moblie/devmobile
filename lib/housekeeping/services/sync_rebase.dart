@@ -15,9 +15,16 @@ import 'sync_outbox.dart';
 //  - what the screens show: the confirmed version, plus this phone's actions
 //    the server has not numbered yet, applied again on top.
 // When new numbered actions arrive, [rebase] moves the confirmed version
-// forward and rebuilds what the screens show. An action the rules refuse is
-// refused on every phone alike; when it was this phone's, it disappears from
-// the screens and is listed in "Vos actions refusées". Like `git rebase`.
+// forward and rebuilds what the screens show. Like `git rebase`.
+//
+// Conflicts resolve themselves, the same way on every phone ([_resolve]):
+//  1. the item changed in between (its version, 409): the action is applied
+//     again on the item's latest version; when the rules accept it, it goes
+//     through ("merged"): on the same field the last one to reach the server
+//     wins, on different fields both stay;
+//  2. the action is no longer possible (room already approved, stock empty,
+//     not allowed...): it is cancelled on every phone ("cancelled").
+// Both are kept in the "Résolu automatiquement" log; nobody has to act.
 
 /// An action as the server numbered it.
 class SyncAction {
@@ -45,7 +52,7 @@ class SyncAction {
   );
 }
 
-/// A numbered action the rules refused.
+/// A numbered action the rules refused, even on the latest version.
 class SyncRefusal {
   final SyncAction action;
   final String message;
@@ -63,13 +70,19 @@ class RebaseResult {
 
   /// Numbered actions handled (applied or refused): they leave the queue.
   final Set<String> confirmed;
+
+  /// Cancelled: not possible any more.
   final List<SyncRefusal> refused;
+
+  /// Applied again on the latest version of their item.
+  final List<SyncAction> merged;
   const RebaseResult({
     required this.base,
     required this.seq,
     required this.current,
     required this.confirmed,
     required this.refused,
+    this.merged = const [],
   });
 }
 
@@ -90,11 +103,13 @@ Future<RebaseResult> rebase({
   var last = seq;
   final handled = <String>{};
   final refused = <SyncRefusal>[];
+  final merged = <SyncAction>[];
   for (final action in numbered) {
     if (action.seq != null && action.seq! <= seq) continue;
     handled.add(action.mutationId);
-    final error = await _apply(confirmed, action, authors);
-    if (error != null) refused.add(error);
+    final outcome = await _resolve(confirmed, action, authors);
+    if (outcome.refusal != null) refused.add(outcome.refusal!);
+    if (outcome.merged) merged.add(action);
     if (action.seq != null && action.seq! > last) last = action.seq!;
   }
   if (until > last) last = until;
@@ -103,9 +118,9 @@ Future<RebaseResult> rebase({
   current['_photoWrites'] = {...?confirmed['_photoWrites'] as Map?};
   for (final action in waiting) {
     if (handled.contains(action.mutationId)) continue;
-    // Refused here too: it will be refused in the server's order as well,
-    // which reports it; until then it changes nothing.
-    await _apply(current, action, authors);
+    // Resolved the same way the server's order will resolve it; until then
+    // a refused one changes nothing.
+    await _resolve(current, action, authors);
   }
   return RebaseResult(
     base: confirmed,
@@ -113,7 +128,78 @@ Future<RebaseResult> rebase({
     current: current,
     confirmed: handled,
     refused: refused,
+    merged: merged,
   );
+}
+
+/// Applies [action]; when its item changed in between (409 with a
+/// version), applies it again on the item's latest version.
+Future<({SyncRefusal? refusal, bool merged})> _resolve(
+  Map<String, dynamic> state,
+  SyncAction action,
+  Map<String, Map<String, dynamic>> authors,
+) async {
+  final first = await _apply(state, action, authors);
+  if (first == null) return (refusal: null, merged: false);
+  final stale = action.body['version'];
+  if (first.status != 409 || stale is! int) {
+    return (refusal: first, merged: false);
+  }
+  var last = first;
+  for (final version in latestVersions(state, action.path, action.body)) {
+    if (version == stale) continue;
+    final error = await _apply(
+      state,
+      SyncAction(
+        seq: action.seq,
+        mutationId: action.mutationId,
+        path: action.path,
+        actorId: action.actorId,
+        body: {...action.body, 'version': version},
+        appliedAt: action.appliedAt,
+      ),
+      authors,
+    );
+    if (error == null) return (refusal: null, merged: true);
+    last = error;
+  }
+  return (refusal: last, merged: false);
+}
+
+/// The versions of the items [path] and [body] name in [state] (the
+/// `/v1/<family>/<id>/...` id, or an id, number or floor in the body), the
+/// family's own list first. A version check only passes on the right item,
+/// so trying one of another item is harmless.
+List<int> latestVersions(
+  Map<String, dynamic> state,
+  String path,
+  Map<String, dynamic> body,
+) {
+  final parts = path.split('/');
+  final family = parts.length == 5 ? parts[2] : null;
+  final keys = {
+    if (parts.length == 5 && parts[3] != 'new') parts[3],
+    for (final field in const ['id', 'number', 'floor'])
+      if (body[field] is String || body[field] is int) '${body[field]}',
+  };
+  if (keys.isEmpty) return const [];
+  final lists = [
+    for (final entry in state.entries)
+      if (entry.value is List) entry,
+  ]..sort((a, b) => (a.key == family ? 0 : 1) - (b.key == family ? 0 : 1));
+  final versions = <int>[];
+  for (final list in lists) {
+    for (final item in list.value as List) {
+      if (item is! Map || item['version'] is! int) continue;
+      if (keys.contains('${item['id']}') ||
+          keys.contains('${item['number']}')) {
+        final version = item['version'] as int;
+        if (!versions.contains(version)) versions.add(version);
+        if (versions.length == 4) return versions;
+      }
+    }
+  }
+  return versions;
 }
 
 Map<String, dynamic> _copy(Map<String, dynamic> state) =>

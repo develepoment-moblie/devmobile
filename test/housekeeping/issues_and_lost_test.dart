@@ -341,7 +341,7 @@ void main() {
       }, where: "module = 'housekeeping'");
       await session.database.close();
       await open();
-      expect(await session.database.versionOf('housekeeping'), 9);
+      expect(await session.database.versionOf('housekeeping'), 10);
       login('amina');
       final kept = ((await backend.snapshot())['lostItems'] as List).single;
       expect((kept['status'], kept['returned_to']), ('returned', 'M. Martin'));

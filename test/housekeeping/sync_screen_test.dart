@@ -76,7 +76,7 @@ void main() {
     addTearDown(() => tester.pumpWidget(const SizedBox()));
   }
 
-  testWidgets('set the server, test it, sync and clear a conflict', (
+  testWidgets('set the server, test it, sync: conflicts resolve themselves', (
     tester,
   ) async {
     await open(tester);
@@ -100,6 +100,7 @@ void main() {
     expect(find.text('Aucune action en attente'), findsOneWidget);
     expect(find.text('Jamais synchronisé'), findsOneWidget);
     expect(find.text('Aucun conflit'), findsOneWidget);
+    expect(find.text('Résolu automatiquement'), findsOneWidget);
 
     // Another phone's agent tried to create stock: refused here.
     server.inject('/v1/supplies/new/create', 'sarah', {
@@ -111,19 +112,16 @@ void main() {
     });
     await tester.tap(find.text('Synchroniser'));
     await settleUntil(tester, find.text('Stock · création'));
-    expect(find.text('Conflits · 1'), findsOneWidget);
-    expect(find.text('Actions d’autres téléphones refusées'), findsOneWidget);
-    expect(find.text('Vos actions refusées'), findsNothing);
+    // Cancelled by itself, on every phone: nothing to click.
+    expect(find.textContaining('Annulée · Sarah · '), findsOneWidget);
     expect(
       find.textContaining('Stock réservé à la gouvernante.'),
       findsOneWidget,
     );
+    expect(find.byIcon(Icons.close), findsNothing);
+    expect(find.text('Aucun conflit'), findsNothing);
     expect(find.textContaining('Dernière synchronisation'), findsOneWidget);
-
-    await tester.tap(
-      find.byTooltip('Retirer « Stock · création » de la liste'),
-    );
-    await settleUntil(tester, find.text('Aucun conflit'));
+    expect(find.text('Synchronisé'), findsOneWidget, reason: 'badge');
   });
 
   testWidgets('a server found on the Wi-Fi is used with one tap', (
@@ -151,6 +149,8 @@ void main() {
     );
 
     await tester.tap(find.text('Utiliser'));
+    await settleUntil(tester, find.text('Rejoindre ce serveur ?'));
+    await tester.tap(find.text('Rejoindre'));
     await settleUntil(tester, find.text('Serveur enregistré'));
     await settleUntil(tester, find.text('Utilisé'));
     expect(find.text('État'), findsOneWidget);
@@ -167,6 +167,8 @@ void main() {
     await settleUntil(tester, find.text('PC-ACCUEIL'));
     expect(find.text('192.168.1.11:8080'), findsOneWidget);
     await tester.tap(find.text('Utiliser'));
+    await settleUntil(tester, find.text('Rejoindre ce serveur ?'));
+    await tester.tap(find.text('Rejoindre'));
     await settleUntil(tester, find.text('Serveur enregistré'));
     await settleUntil(tester, find.text('Utilisé'));
   });
