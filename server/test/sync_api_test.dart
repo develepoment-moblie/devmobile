@@ -54,11 +54,21 @@ void main() {
     return json;
   }
 
-  test('health answers with the number of actions', () async {
-    final (status, json) = await call('GET', '/v1/health');
-    expect(status, 200);
-    expect(json, {'status': 'ok', 'mutations': 0, 'lastSeq': 0});
-  });
+  test(
+    'health answers with its id, its name and the number of actions',
+    () async {
+      final (status, json) = await call('GET', '/v1/health');
+      expect(status, 200);
+      expect(json, {
+        'status': 'ok',
+        'serverId': log.serverId,
+        'name': 'Serveur Nova Paris',
+        'mutations': 0,
+        'lastSeq': 0,
+      });
+      expect(log.serverId, matches(RegExp(r'^[0-9a-f-]{36}$')));
+    },
+  );
 
   test('push stores new actions once: a retry is a duplicate', () async {
     final first = await push('phone-1', [

@@ -153,12 +153,24 @@ d’abord : chaque action est enregistrée sur le téléphone, puis envoyée.
 - **Quand** : au démarrage, 2 s après chaque modification, toutes les 20 s,
   et sur « Synchroniser ». Sans réseau : nouvel essai après 5 s, 10 s, 20 s…
   jusqu’à 5 min.
-- **Écran** « Synchronisation » (gouvernante et Manager) : adresse du serveur,
-  « Tester la connexion », actions en attente, dernière synchronisation,
-  conflits. Pastille « Synchronisé / Hors ligne · n actions en attente » sous
+- **Écran** « Synchronisation » (gouvernante et Manager) : serveurs trouvés
+  sur le Wi-Fi (« Utiliser »), adresse du serveur, « Tester la connexion »,
+  actions en attente, dernière synchronisation, conflits. Pastille « Synchronisé / Hors ligne · n actions en attente » sous
   l’en-tête pour tous.
 - **Adresse** : HTTP seulement pour une adresse du réseau local (10.x,
   172.16-31.x, 192.168.x, localhost), sinon HTTPS.
+- **Découverte sur le Wi-Fi** (`services/server_discovery.dart`) : le serveur
+  s’annonce toutes les 2 s en UDP (port 45454) avec son identifiant. L’écran
+  « Synchronisation » écoute tant qu’il est ouvert et propose les serveurs
+  entendus ; un appui les enregistre, après vérification de l’identifiant
+  par `GET /v1/health`. L’adresse retenue est celle d’où vient l’annonce
+  (jamais une adresse écrite dedans), et elle doit être du réseau local.
+  L’identifiant du serveur est gardé dans `housekeeping_sync_state`
+  (`server_id`). Si le serveur ne répond plus, le téléphone écoute 3 s : le
+  même serveur (même identifiant, vérifié) à une autre adresse est suivi
+  automatiquement et la synchronisation reprend là où elle en était ; un
+  autre serveur n’est jamais suivi. Saisir l’adresse reste possible (Wi-Fi
+  qui bloque les annonces, émulateur : `10.0.2.2:8080`).
 - **Sauvegardes** : les tables `housekeeping_sync_*` appartiennent au
   téléphone ; une sauvegarde ne les contient pas. Une restauration vide la
   file ; les données restaurées deviennent la version confirmée et la liste
@@ -240,6 +252,7 @@ services/
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
   housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
+  server_discovery.dart         serveur de l’hôtel trouvé sur le Wi-Fi (annonces UDP)
   http_guard.dart               appels web : délai, absence de réseau, réponse JSON
   demo_hotel.dart               hôtel de démonstration (option de compilation)
   product_lookup.dart           fiche produit depuis un code-barres (Open Beauty / Food Facts)

@@ -12,6 +12,7 @@ cd server
 dart pub get
 dart run bin/server.dart            # port 8080, journal data/nova_sync.db
 dart run bin/server.dart --port 9000 --db data/autre.db
+dart run bin/server.dart --no-discovery   # sans annonce sur le Wi-Fi
 ```
 
 Le serveur affiche les adresses à saisir dans l'application (écran
@@ -19,11 +20,31 @@ Le serveur affiche les adresses à saisir dans l'application (écran
 sur le même Wi-Fi que l'ordinateur ; depuis l'émulateur Android : `10.0.2.2:8080`.
 Pare-feu Windows : autoriser Dart sur les réseaux privés au premier lancement.
 
+## Découverte automatique
+
+Le serveur s’annonce sur le Wi-Fi toutes les 2 secondes (UDP, port 45454,
+`lib/discovery.dart`) :
+
+```json
+{"service":"nova-sync","v":1,"id":"<identifiant>","name":"PC-ACCUEIL","port":8080}
+```
+
+L’écran « Synchronisation » de l’application affiche alors le serveur ; un
+appui suffit, sans rien saisir. L’identifiant est créé une fois et gardé
+dans le journal (table `sync_server`) : si l’ordinateur reçoit une autre
+adresse du Wi-Fi, les téléphones reconnaissent leur serveur et le suivent
+seuls. Supprimer `data/nova_sync.db` crée un nouveau serveur : les téléphones
+devront le choisir de nouveau.
+
+Les annonces partent vers `255.255.255.255` et vers l’adresse de diffusion de
+chaque carte réseau (réseau en /24 supposé). Certains Wi-Fi (invités,
+écoles) bloquent ces messages : saisir l’adresse reste possible.
+
 ## API
 
 | Méthode | Chemin | Rôle |
 |---|---|---|
-| GET | `/v1/health` | serveur en marche, nombre d'actions |
+| GET | `/v1/health` | serveur en marche, `serverId`, `name` (nom de l'ordinateur), nombre d'actions |
 | POST | `/v1/sync/push` | `{deviceId, mutations:[{mutationId, path, body, actorId, appliedAt}]}` → `applied`, `duplicate` ou `rejected` pour chacune |
 | GET | `/v1/sync/pull?since=<seq>&limit=50` | toutes les actions après `since`, dans l'ordre du serveur, celles du téléphone qui demande comprises ; `until` = dernier numéro rendu, `more` = page suivante |
 | GET | `/v1/rooms/activity` | dernière action de chaque chambre (à ouvrir dans un navigateur) |

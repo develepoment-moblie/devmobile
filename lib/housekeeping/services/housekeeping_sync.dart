@@ -9,6 +9,7 @@ import 'app_exception.dart';
 import 'http_guard.dart';
 import 'housekeeping_store.dart';
 import 'mutation_meta.dart';
+import 'server_discovery.dart';
 import 'sync_outbox.dart';
 import 'sync_rebase.dart';
 
@@ -23,7 +24,9 @@ import 'sync_rebase.dart';
 //     the confirmed version moves forward, the actions still waiting are
 //     applied again on top. A refused action is refused on every phone alike.
 // Without network nothing is lost: the queue waits and the sync retries
-// with a growing delay. A repeated mutationId changes nothing, on the
+// with a growing delay. When the server cannot be reached, the phone also
+// listens a few seconds on the Wi-Fi (server_discovery.dart): if the same
+// server (same id) announces itself at another address, it follows it. A repeated mutationId changes nothing, on the
 // phone as on the server, so retrying is always safe.
 
 /// How the sync is doing, for the badge and the Synchronisation screen.
@@ -57,6 +60,9 @@ class RejectedAction {
 
 class SyncOverview {
   final Uri? server;
+
+  /// The server's id (from GET /v1/health), once it answered.
+  final String? serverId;
   final String deviceId;
   final int pending, lastSeq;
   final DateTime? lastSyncAt;
@@ -65,6 +71,7 @@ class SyncOverview {
   final List<RejectedAction> rejected;
   const SyncOverview({
     required this.server,
+    this.serverId,
     required this.deviceId,
     required this.pending,
     required this.lastSeq,
@@ -213,7 +220,10 @@ String conflictText(int count) => '$count conflit${count > 1 ? 's' : ''}';
 /// The server could not be reached, or answered with an error.
 class _Unreachable implements Exception {
   final String message;
-  const _Unreachable(this.message);
+
+  /// No answer at all (Wi-Fi, address, timeout), not an error answer.
+  final bool network;
+  const _Unreachable(this.message, {this.network = false});
 }
 
 // One sync service per store (per session), shared by the screens.
@@ -233,6 +243,12 @@ class HousekeepingSync extends ChangeNotifier {
   /// False in tests: no timers, syncs only when [syncNow] is called.
   final bool background;
 
+  /// Listens for the server on the Wi-Fi; null: typing the address only.
+  final ServerDiscovery? discovery;
+
+  /// How long a failed sync listens for its server's new address.
+  final Duration followWithin;
+
   /// Actions sent or received per request.
   static const pageSize = 50;
 
@@ -243,8 +259,11 @@ class HousekeepingSync extends ChangeNotifier {
     this.pollEvery = const Duration(seconds: 20),
     DateTime Function()? clock,
     this.background = true,
+    ServerDiscovery? discovery,
+    this.followWithin = const Duration(seconds: 3),
   }) : _client = client ?? http.Client(),
-       clock = clock ?? DateTime.now;
+       clock = clock ?? DateTime.now,
+       discovery = discovery ?? (background ? ServerDiscovery() : null);
 
   SyncPhase phase = SyncPhase.off;
   SyncOverview? overview;
@@ -342,6 +361,7 @@ class HousekeepingSync extends ChangeNotifier {
         server: settings['server_url'] == null
             ? null
             : Uri.parse(settings['server_url']!),
+        serverId: settings['server_id'],
         deviceId: device,
         pending: pending,
         lastSeq: int.tryParse(settings['last_seq'] ?? '') ?? 0,
@@ -391,19 +411,42 @@ class HousekeepingSync extends ChangeNotifier {
     }
   }
 
+  /// The id GET /v1/health gives, or null when the server has none.
+  Future<String?> _serverIdAt(Uri server) async {
+    final id = (await _getJson(server.replace(path: '/v1/health')))['serverId'];
+    return id is String && id.isNotEmpty ? id : null;
+  }
+
   /// Saves the server's address and starts syncing. Another server starts
-  /// again from its first action (replays already applied change nothing).
-  Future<void> setServer(String address) async {
+  /// again from its first action (replays already applied change nothing);
+  /// the same server at a new address carries on where it was.
+  /// [expectedId]: the id a found server announced; it must answer with it.
+  Future<void> setServer(String address, {String? expectedId}) async {
     final server = parseServerAddress(address);
+    String? id;
+    try {
+      id = await _serverIdAt(server);
+    } on _Unreachable catch (e) {
+      // Saved anyway when typed: the server may simply be off for now.
+      if (expectedId != null) throw AppServiceException(e.message);
+    }
+    if (expectedId != null && id != expectedId) {
+      throw const AppServiceException(
+        'Ce serveur ne correspond pas à l’annonce reçue. Réessayez.',
+      );
+    }
     await store.syncLedger((tx) async {
-      final previous = (await _settings(tx))['server_url'];
-      if (previous != server.toString()) {
+      final settings = await _settings(tx);
+      final sameServer = id != null && id == settings['server_id'];
+      if (settings['server_url'] != server.toString() && !sameServer) {
         // Another server: its list is read from the start, on top of the
         // confirmed version (actions already in it change nothing).
         await _set(tx, 'last_seq', '0');
         await _set(tx, 'last_error', null);
         await tx.update('housekeeping_sync_base', {'seq': 0});
+        await _set(tx, 'server_id', null);
       }
+      if (id != null) await _set(tx, 'server_id', id);
       await _set(tx, 'server_url', server.toString());
     });
     // From now on, actions made here wait to be confirmed: the confirmed
@@ -414,6 +457,10 @@ class HousekeepingSync extends ChangeNotifier {
     await refresh();
     _arm();
   }
+
+  /// Saves a server found on the Wi-Fi, once it answered with its id.
+  Future<void> useFoundServer(FoundServer found) =>
+      setServer(found.hostPort, expectedId: found.id);
 
   /// Stops syncing. The queue is kept and sent once a server is set again.
   Future<void> clearServer() async {
@@ -471,7 +518,8 @@ class HousekeepingSync extends ChangeNotifier {
     return ok;
   }
 
-  Future<bool> _syncOnce() async {
+  /// [followed]: already moved to the server's new address this time.
+  Future<bool> _syncOnce({bool followed = false}) async {
     final view = await refresh();
     final server = view.server;
     if (server == null) return false;
@@ -484,6 +532,7 @@ class HousekeepingSync extends ChangeNotifier {
         await _rebuild(const [], view.lastSeq);
       }
       await _pull(server, view.deviceId);
+      if (view.serverId == null) await _learnServerId(server);
       _failures = 0;
       _retry?.cancel();
       _retry = null;
@@ -495,12 +544,47 @@ class HousekeepingSync extends ChangeNotifier {
       await refresh();
       return true;
     } on _Unreachable catch (e) {
+      if (e.network && !followed && await _followServer(view)) {
+        return _syncOnce(followed: true);
+      }
       await store.syncLedger((tx) => _set(tx, 'last_error', e.message));
       phase = SyncPhase.offline;
       _scheduleRetry();
       await refresh();
       return false;
     }
+  }
+
+  /// Remembers the server's id (saved while it was off, or an older
+  /// server without one). Not having it only stops [_followServer].
+  Future<void> _learnServerId(Uri server) async {
+    try {
+      final id = await _serverIdAt(server);
+      if (id != null) {
+        await store.syncLedger((tx) => _set(tx, 'server_id', id));
+      }
+    } on _Unreachable {
+      // Next sync.
+    }
+  }
+
+  /// The server did not answer: is it announcing itself at another address
+  /// (the computer got a new one from the Wi-Fi)? Only the same server, by
+  /// its id, checked with GET /v1/health. True when the address was moved.
+  Future<bool> _followServer(SyncOverview view) async {
+    final id = view.serverId, current = view.server, finder = discovery;
+    if (finder == null || id == null || current == null) return false;
+    final found = await finder.find(id, followWithin);
+    if (found == null || found.address == current || _disposed) return false;
+    try {
+      if (await _serverIdAt(found.address) != id) return false;
+    } on _Unreachable {
+      return false;
+    }
+    await store.syncLedger(
+      (tx) => _set(tx, 'server_url', found.address.toString()),
+    );
+    return true;
   }
 
   /// 5 s, 10 s, 20 s… up to 5 minutes between attempts.
@@ -726,7 +810,7 @@ class HousekeepingSync extends ChangeNotifier {
         NetworkFailure.timeout => 'Le serveur ne répond pas (délai dépassé).',
         NetworkFailure.offline =>
           'Serveur injoignable. Vérifiez le Wi-Fi et l’adresse.',
-      }),
+      }, network: true),
     );
     if (response.statusCode != 200) {
       throw _Unreachable('Erreur du serveur (${response.statusCode}).');

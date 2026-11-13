@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../shared/custom/animations.dart';
@@ -6,9 +8,11 @@ import '../custom/busy_action.dart';
 import '../custom/housekeeping_widgets.dart';
 import '../custom/sync_badge.dart';
 import '../services/housekeeping_sync.dart';
+import '../services/server_discovery.dart';
 
-// "Synchronisation" (supervisor and Manager): the hotel server's address,
-// the actions waiting to be sent, the last sync and the conflicts.
+// "Synchronisation" (supervisor and Manager): the servers found on the Wi-Fi
+// (one tap to use one), the hotel server's address, the actions waiting to
+// be sent, the last sync and the conflicts.
 class SyncScreen extends StatefulWidget {
   final HousekeepingSync sync;
   const SyncScreen({super.key, required this.sync});
@@ -21,6 +25,14 @@ class _SyncScreenState extends State<SyncScreen>
   final address = TextEditingController();
   String? check;
 
+  /// Servers heard on the Wi-Fi while the screen is open, by id.
+  final found = <String, FoundServer>{};
+  StreamSubscription<FoundServer>? _listening;
+  Timer? _searching;
+
+  /// Listened long enough to say nothing was found.
+  bool searched = false;
+
   @override
   Listenable get listenable => widget.sync;
 
@@ -32,10 +44,24 @@ class _SyncScreenState extends State<SyncScreen>
         address.text = '${view.server!.host}:${view.server!.port}';
       }
     }, onError: (Object e) => setState(() => error = e.toString()));
+    final discovery = widget.sync.discovery;
+    if (discovery != null) {
+      _listening = discovery.watch().listen((server) {
+        if (mounted && found[server.id] != server) {
+          setState(() => found[server.id] = server);
+        }
+      });
+      // The server announces itself every 2 seconds.
+      _searching = Timer(const Duration(seconds: 10), () {
+        if (mounted) setState(() => searched = true);
+      });
+    }
   }
 
   @override
   void dispose() {
+    _listening?.cancel();
+    _searching?.cancel();
     address.dispose();
     super.dispose();
   }
@@ -58,6 +84,12 @@ class _SyncScreenState extends State<SyncScreen>
     if (mounted) setState(() => check = message);
   }, 'Connexion réussie');
 
+  Future<void> _use(FoundServer server) => run(() async {
+    setState(() => check = null);
+    await widget.sync.useFoundServer(server);
+    if (mounted) address.text = server.hostPort;
+  }, 'Serveur enregistré');
+
   @override
   Widget build(BuildContext context) {
     final sync = widget.sync;
@@ -75,6 +107,30 @@ class _SyncScreenState extends State<SyncScreen>
             style: TextStyle(color: AppColors.muted, fontSize: 12.5),
           ),
           const SizedBox(height: 16),
+          if (sync.discovery != null) ...[
+            const _Heading(
+              'Serveurs trouvés sur le Wi-Fi',
+              'Le serveur de l’hôtel s’annonce sur ce réseau.',
+            ),
+            if (found.isEmpty)
+              _Line(
+                Icons.wifi_find,
+                searched
+                    ? 'Aucun serveur trouvé. Saisissez l’adresse ci-dessous.'
+                    : 'Recherche d’un serveur sur le Wi-Fi…',
+                AppColors.muted,
+              ),
+            for (final server in found.values)
+              _FoundCard(
+                key: ValueKey(server.id),
+                server: server,
+                inUse:
+                    view?.server == server.address &&
+                    view?.serverId == server.id,
+                onUse: busy ? null : () => _use(server),
+              ),
+            const SizedBox(height: 14),
+          ],
           TextField(
             controller: address,
             keyboardType: TextInputType.url,
@@ -296,6 +352,45 @@ class _Line extends StatelessWidget {
           child: Text(text, style: TextStyle(color: color)),
         ),
       ],
+    ),
+  );
+}
+
+class _FoundCard extends StatelessWidget {
+  final FoundServer server;
+  final bool inUse;
+  final VoidCallback? onUse;
+  const _FoundCard({
+    super.key,
+    required this.server,
+    required this.inUse,
+    required this.onUse,
+  });
+  @override
+  Widget build(BuildContext context) => Card(
+    color: Colors.white,
+    elevation: 0,
+    child: ListTile(
+      leading: const Icon(Icons.dns_outlined, color: AppColors.muted),
+      title: Text(server.name),
+      subtitle: Text(server.hostPort),
+      trailing: inUse
+          ? const Text(
+              'Utilisé',
+              style: TextStyle(
+                color: AppColors.green,
+                fontWeight: FontWeight.w600,
+              ),
+            )
+          : Semantics(
+              label: 'Utiliser le serveur ${server.name}',
+              excludeSemantics: true,
+              button: true,
+              child: TextButton(
+                onPressed: onUse,
+                child: const Text('Utiliser'),
+              ),
+            ),
     ),
   );
 }
