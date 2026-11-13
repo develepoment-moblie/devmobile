@@ -49,8 +49,14 @@ toujours possible.
 |---|---|---|
 | GET | `/v1/health` | serveur en marche, `serverId`, `name` (nom de l'ordinateur), nombre d'actions |
 | POST | `/v1/sync/push` | `{deviceId, mutations:[{mutationId, path, body, actorId, appliedAt}]}` → `applied`, `duplicate` ou `rejected` pour chacune |
-| GET | `/v1/sync/pull?since=<seq>&limit=50` | toutes les actions après `since`, dans l'ordre du serveur, celles du téléphone qui demande comprises ; `until` = dernier numéro rendu, `more` = page suivante |
+| GET | `/v1/sync/pull?since=<seq>&limit=50&wait=25` | toutes les actions après `since`, dans l'ordre du serveur, celles du téléphone qui demande comprises ; `until` = dernier numéro rendu, `more` = page suivante |
+| PUT | `/v1/sync/snapshot?seq=<n>&device=<id>` | copie des données d'un téléphone (gzip) à l'action n ; gardée si plus récente |
+| GET | `/v1/sync/snapshot` | la dernière copie (en-tête `x-snapshot-seq`), pour un téléphone qui rejoint |
 | GET | `/v1/rooms/activity` | dernière action de chaque chambre (à ouvrir dans un navigateur) |
+
+Avec `wait` (secondes, 30 au plus) et rien de nouveau, `pull` attend et
+répond dès qu'un téléphone envoie une action : les autres la reçoivent en
+moins d'une seconde.
 
 Un `mutationId` déjà reçu n'est jamais enregistré deux fois : un téléphone
 peut toujours renvoyer après une coupure.

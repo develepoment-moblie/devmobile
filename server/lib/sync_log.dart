@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:math';
 
 import 'package:sqlite3/sqlite3.dart';
@@ -51,6 +53,12 @@ class SyncLog {
       "INSERT OR IGNORE INTO sync_server (key, value) VALUES ('server_id', ?)",
       [newUuid()],
     );
+    // The hotel's data at one action number, sent by a phone: a phone that
+    // joins starts from it instead of an empty hotel. One row, the latest.
+    db.execute('''CREATE TABLE IF NOT EXISTS sync_snapshot (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      seq INTEGER NOT NULL, device_id TEXT NOT NULL, data BLOB NOT NULL,
+      received_at TEXT NOT NULL)''');
     serverId =
         db
                 .select("SELECT value FROM sync_server WHERE key = 'server_id'")
@@ -68,7 +76,50 @@ class SyncLog {
   factory SyncLog.memory({DateTime Function()? clock}) =>
       SyncLog(sqlite3.openInMemory(), clock: clock);
 
-  void close() => db.close();
+  // Told after each push that stored something: the phones waiting in
+  // [waitForMore] answer at once.
+  final _arrivals = StreamController<void>.broadcast();
+
+  void close() {
+    _arrivals.close();
+    db.close();
+  }
+
+  /// Returns as soon as there is an action after [since], or after [max].
+  Future<void> waitForMore(int since, Duration max) async {
+    if (lastSeq > since) return;
+    await _arrivals.stream.first.timeout(max, onTimeout: () {});
+  }
+
+  /// Keeps [data] (the phone's confirmed data at [seq], gzip) when it is
+  /// newer than the one kept and [seq] is a number this server gave.
+  bool saveSnapshot(int seq, String deviceId, Uint8List data) {
+    if (seq < 1 || seq > lastSeq) return false;
+    final current = snapshotSeq;
+    if (current != null && current >= seq) return false;
+    db.execute(
+      'INSERT OR REPLACE INTO sync_snapshot '
+      '(id, seq, device_id, data, received_at) VALUES (1, ?, ?, ?, ?)',
+      [seq, deviceId, data, clock().toIso8601String()],
+    );
+    return true;
+  }
+
+  int? get snapshotSeq =>
+      db
+              .select('SELECT seq FROM sync_snapshot WHERE id = 1')
+              .firstOrNull?['seq']
+          as int?;
+
+  /// The latest snapshot, or null.
+  ({int seq, Uint8List data})? snapshot() {
+    final row = db
+        .select('SELECT seq, data FROM sync_snapshot WHERE id = 1')
+        .firstOrNull;
+    return row == null
+        ? null
+        : (seq: row['seq'] as int, data: row['data'] as Uint8List);
+  }
 
   int get count =>
       db.select('SELECT COUNT(*) AS n FROM sync_mutations').first['n'] as int;
@@ -141,6 +192,7 @@ class SyncLog {
         }
       }
       db.execute('COMMIT');
+      if (results.any((r) => r['status'] == 'applied')) _arrivals.add(null);
     } catch (_) {
       db.execute('ROLLBACK');
       rethrow;

@@ -11,6 +11,7 @@ import 'package:nova_paris/housekeeping/services/housekeeping_sync.dart';
 import 'package:nova_paris/housekeeping/services/mutation_meta.dart';
 import 'package:nova_paris/housekeeping/services/room_catalog_backend.dart';
 import 'package:nova_paris/housekeeping/services/server_discovery.dart';
+import 'package:nova_paris/housekeeping/services/sync_rebase.dart';
 import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_session.dart';
 import 'package:path/path.dart' as p;
@@ -35,6 +36,11 @@ class FakeHotelServer {
   /// from the Wi-Fi).
   String? host;
 
+  /// The copy of the data a phone sent (PUT /v1/sync/snapshot).
+  ({int seq, List<int> data})? snapshot;
+  int snapshotsSent = 0;
+  final waits = <String?>[];
+
   // Answers in UTF-8, like the real server.
   http.Response reply(Object body, [int status = 200]) => http.Response.bytes(
     utf8.encode(jsonEncode(body)),
@@ -56,7 +62,27 @@ class FakeHotelServer {
         'serverId': serverId,
         'name': 'PC-ACCUEIL',
         'mutations': log.length,
+        'snapshotSeq': snapshot?.seq,
       });
+    }
+    if (path == '/v1/sync/snapshot' && request.method == 'PUT') {
+      snapshotsSent++;
+      final seq = int.parse(request.url.queryParameters['seq']!);
+      final stored =
+          seq <= log.length && (snapshot == null || seq > snapshot!.seq);
+      if (stored) snapshot = (seq: seq, data: request.bodyBytes);
+      return reply({'stored': stored, 'snapshotSeq': snapshot?.seq});
+    }
+    if (path == '/v1/sync/snapshot') {
+      if (snapshot == null) return http.Response('{}', 404);
+      return http.Response.bytes(
+        snapshot!.data,
+        200,
+        headers: {
+          'content-type': 'application/gzip',
+          'x-snapshot-seq': '${snapshot!.seq}',
+        },
+      );
     }
     if (path == '/v1/sync/push') {
       final body = jsonDecode(request.body) as Map<String, dynamic>;
@@ -79,6 +105,7 @@ class FakeHotelServer {
       final q = request.url.queryParameters;
       final since = int.parse(q['since']!);
       final limit = int.parse(q['limit']!);
+      waits.add(q['wait']);
       final page = log.where((m) => m['seq'] > since).take(limit).toList();
       return reply({
         // Every action in order, the asking phone's own included.
@@ -154,10 +181,14 @@ class Phone {
   /// same install, or the same backup restored).
   static String? template;
 
+  /// Backups made before joining a server, all phones together.
+  static int backupsBeforeJoin = 0;
+
   static Future<Phone> open(
     String path,
     FakeHotelServer server, {
     ServerDiscovery? discovery,
+    bool connect = true,
   }) async {
     if (template != null && !File(path).existsSync()) {
       File(template!).copySync(path);
@@ -176,8 +207,9 @@ class Phone {
       timeout: const Duration(milliseconds: 200),
       discovery: discovery,
       followWithin: const Duration(milliseconds: 300),
+      backupBeforeJoin: () async => backupsBeforeJoin++,
     );
-    await sync.setServer('192.168.1.20');
+    if (connect) await sync.setServer('192.168.1.20');
     return Phone._(session, store, sync);
   }
 
@@ -367,9 +399,11 @@ void main() {
       );
       expect(view.conflicts.last.label, 'Stock · création');
       expect(view.lastSeq, 2, reason: 'a refused action does not block');
-
-      await supervisor.sync.dismissConflict(view.conflicts.first.mutationId);
-      expect((await supervisor.sync.refresh()).conflicts, hasLength(1));
+      expect(
+        view.conflicts.every((c) => !c.merged),
+        isTrue,
+        reason: 'not allowed: cancelled, never applied on a newer version',
+      );
     });
 
     test('the Manager\'s catalog changes are synced too', () async {
@@ -417,25 +451,29 @@ void main() {
         'version': version,
       });
       await manager.sync.syncNow(); // #1 the Manager
-      await supervisor.sync.syncNow(); // #2 the supervisor, refused
+      await supervisor.sync.syncNow(); // #2 the supervisor, a stale version
       await manager.sync.syncNow();
       await agent.sync.syncNow();
 
-      // The supervisor's assignment is undone on her phone and explained.
+      // Resolved by itself: the assignment is applied on the latest version
+      // of the room, both changes stay.
       final room = await supervisor.room('305');
       expect(room['category'], 'Suite');
-      expect(room['employeeId'], isNull);
+      expect(room['employeeId'], 'lina');
       final mine = (await supervisor.sync.refresh()).conflicts.single;
       expect(mine.own, isTrue);
+      expect(mine.merged, isTrue);
       expect(mine.label, 'Chambre 305 · attribution');
-      expect(mine.message, contains('changé'));
+      expect(mine.message, 'Appliquée sur la dernière version.');
       expect((await supervisor.sync.refresh()).pending, 0);
-      // The other phones list the same refusal, as another phone's.
+      // The other phones log the same resolution, as another phone's.
       for (final other in [manager, agent]) {
         final c = (await other.sync.refresh()).conflicts.single;
         expect(c.mutationId, mine.mutationId);
         expect(c.own, isFalse);
+        expect(c.merged, isTrue);
         expect(c.actorName, 'Amina');
+        expect((await other.room('305'))['employeeId'], 'lina');
       }
       // The three phones hold exactly the same data.
       final reference = await manager.data();
@@ -489,16 +527,19 @@ void main() {
       final reference = await third.data();
       expect(await supervisor.data(), reference);
       expect(await agent.data(), reference);
-      // The third phone's work reached the server first: it stands.
-      expect((await agent.room('305'))['employeeId'], 'lina');
+      // The third phone's work reached the server first; the supervisor's
+      // came after, on stale versions: applied on the latest ones. Same
+      // field (who cleans 305): the last one to arrive wins; stock: both.
+      expect((await agent.room('305'))['employeeId'], 'sarah');
       expect((await agent.room('306'))['employeeId'], 'lina');
       final towels = (await agent.supplies()).firstWhere(
         (s) => s['id'] == 'towels',
       );
-      expect(towels['quantity'], 78, reason: '68 + 10; the -3 was refused');
+      expect(towels['quantity'], 75, reason: '68 + 10 - 3: both kept');
+      final log = (await supervisor.sync.refresh()).conflicts;
       expect(
         [
-          for (final c in (await supervisor.sync.refresh()).conflicts)
+          for (final c in log)
             if (c.own) c.label,
         ],
         unorderedEquals([
@@ -506,6 +547,7 @@ void main() {
           'Stock · mouvement de stock',
         ]),
       );
+      expect(log.every((c) => c.merged), isTrue);
     });
 
     test('an action still waiting is applied again on top', () async {
@@ -582,6 +624,306 @@ void main() {
     });
   });
 
+  group('conflicts resolve themselves', () {
+    test('an action no longer possible is cancelled on every phone', () async {
+      await supervisor.act('305', 'assign', {
+        'employeeId': 'sarah',
+        'note': '',
+        'urgent': false,
+      });
+      await supervisor.sync.syncNow();
+      await agent.sync.syncNow();
+      // Offline, the agent starts 305; meanwhile the supervisor gives it to
+      // Lina: Sarah may no longer start it.
+      server.online = false;
+      await agent.act('305', 'start');
+      expect((await agent.room('305'))['cleaning'], 'inProgress');
+      server.online = true;
+      await supervisor.act('305', 'assign', {
+        'employeeId': 'lina',
+        'note': '',
+        'urgent': false,
+      });
+      await supervisor.sync.syncNow();
+      await agent.sync.syncNow();
+      await supervisor.sync.syncNow();
+
+      for (final phone in [agent, supervisor]) {
+        final room = await phone.room('305');
+        expect(room['employeeId'], 'lina');
+        expect(room['cleaning'], isNot('inProgress'));
+        final entry = (await phone.sync.refresh()).conflicts.single;
+        expect(entry.merged, isFalse);
+        expect(entry.label, 'Chambre 305 · début du nettoyage');
+        expect(entry.own, phone == agent);
+      }
+      expect((await agent.sync.refresh()).pending, 0);
+      expect(await agent.data(), await supervisor.data());
+    });
+
+    test('the log keeps the last 20 entries', () async {
+      for (var i = 0; i < 25; i++) {
+        server.inject('/v1/rooms/305/start', 'ghost', {'version': 1});
+      }
+      expect(await supervisor.sync.syncNow(), isTrue);
+      final log = (await supervisor.sync.refresh()).conflicts;
+      expect(log, hasLength(HousekeepingSync.logSize));
+      expect((await supervisor.sync.refresh()).lastSeq, 25);
+    });
+
+    test('a version mismatch on an unknown item is cancelled', () {
+      expect(latestVersions({'rooms': []}, '/v1/rooms/999/start', {}), isEmpty);
+      final state = {
+        'rooms': [
+          {'number': '305', 'version': 4},
+        ],
+        'supplies': [
+          {'id': '305', 'version': 9},
+          {'id': 'towels', 'version': 2},
+        ],
+      };
+      expect(latestVersions(state, '/v1/rooms/305/assign', {}), [4, 9]);
+      expect(latestVersions(state, '/v1/supplies/towels/movement', {}), [2]);
+      expect(latestVersions(state, 'catalog/update', {'number': '305'}), [
+        4,
+        9,
+      ]);
+      expect(latestVersions(state, '/v1/supplies/new/create', {}), isEmpty);
+    });
+  });
+
+  group('live', () {
+    test(
+      'a change on another phone arrives with one waiting request',
+      () async {
+        await supervisor.act('305', 'assign', {
+          'employeeId': 'sarah',
+          'note': '',
+          'urgent': false,
+        });
+        await supervisor.sync.syncNow();
+        expect(await agent.sync.waitForChanges(), isTrue);
+        expect(server.waits, contains('25'));
+        expect((await agent.room('305'))['employeeId'], 'sarah');
+        // Nothing new: the request just comes back.
+        expect(await agent.sync.waitForChanges(), isTrue);
+        server.online = false;
+        expect(await agent.sync.waitForChanges(), isFalse);
+      },
+    );
+  });
+
+  group('joining a server', () {
+    late Phone joiner;
+    setUp(() async {
+      Phone.backupsBeforeJoin = 0;
+      joiner =
+          await Phone.open(
+              p.join(directory.path, 'joiner.db'),
+              server,
+              connect: false,
+            )
+            ..login('amina');
+    });
+    tearDown(() async {
+      joiner.sync.dispose();
+      await joiner.session.database.close();
+    });
+
+    test(
+      'a synced phone shares its data once, then every 100 actions',
+      () async {
+        await supervisor.act('305', 'assign', {
+          'employeeId': 'sarah',
+          'note': '',
+          'urgent': false,
+        });
+        expect(await supervisor.sync.syncNow(), isTrue);
+        expect(server.snapshot?.seq, 1);
+        expect(server.snapshotsSent, 1);
+        await supervisor.act('306', 'assign', {
+          'employeeId': 'lina',
+          'note': '',
+          'urgent': false,
+        });
+        expect(await supervisor.sync.syncNow(), isTrue);
+        expect(await agent.sync.syncNow(), isTrue);
+        expect(server.snapshotsSent, 1, reason: 'the copy is recent enough');
+      },
+    );
+
+    test('a new phone takes the hotel\'s data, keeps its own waiting work, '
+        'and ends up identical', () async {
+      await supervisor.act('305', 'assign', {
+        'employeeId': 'sarah',
+        'note': 'Copie',
+        'urgent': false,
+      });
+      await supervisor.sync.syncNow(); // shares its data (seq 1)
+      await supervisor.act('306', 'assign', {
+        'employeeId': 'lina',
+        'note': '',
+        'urgent': false,
+      });
+      await supervisor.sync.syncNow(); // seq 2, after the copy
+
+      // The joining phone has other data (not from any action) and some
+      // work of its own waiting.
+      await joiner.session.database.database.update(
+        'housekeeping_rooms',
+        {'note': 'Autre hôtel'},
+        where: 'number = ?',
+        whereArgs: ['305'],
+      );
+      await joiner.act('410', 'priority', {'value': 'vip'});
+      expect((await joiner.sync.refresh()).pending, 1);
+
+      await joiner.sync.setServer('192.168.1.20');
+      expect(Phone.backupsBeforeJoin, 1);
+      expect((await joiner.room('305'))['note'], 'Copie');
+      expect((await joiner.sync.refresh()).pending, 1, reason: 'kept');
+
+      expect(await joiner.sync.syncNow(), isTrue);
+      expect((await joiner.room('306'))['employeeId'], 'lina');
+      expect((await joiner.sync.refresh()).pending, 0);
+      await supervisor.sync.syncNow();
+      expect(await joiner.data(), await supervisor.data());
+      expect(server.log.last['path'], '/v1/rooms/410/priority');
+    });
+
+    test('the same server again: no new copy, no backup', () async {
+      await supervisor.act('305', 'assign', {
+        'employeeId': 'sarah',
+        'note': '',
+        'urgent': false,
+      });
+      await supervisor.sync.syncNow();
+      await joiner.sync.setServer('192.168.1.20');
+      expect(Phone.backupsBeforeJoin, 1);
+      await joiner.sync.setServer('192.168.1.20');
+      expect(Phone.backupsBeforeJoin, 1);
+      expect(
+        joiner.sync.joins(
+          FoundServer(
+            id: server.serverId,
+            name: 'PC',
+            address: Uri.parse('http://192.168.1.20:8080'),
+          ),
+        ),
+        isFalse,
+      );
+    });
+
+    test('a server without a copy yet: the phone keeps its data', () async {
+      server.inject('/v1/rooms/305/start', 'ghost', {'version': 1});
+      await joiner.sync.setServer('192.168.1.20');
+      expect(Phone.backupsBeforeJoin, 0);
+      expect(await joiner.sync.syncNow(), isTrue);
+    });
+  });
+
+  group('connecting by itself', () {
+    late FakeDiscovery wifi;
+    late Phone phone;
+    setUp(() async {
+      wifi = FakeDiscovery();
+      final made = await AppDatabase.open(
+        schemas: [housekeepingSchema],
+        factory: databaseFactoryFfi,
+        path: p.join(directory.path, 'auto.db'),
+      );
+      final session = AppSession(database: made, staff: TestStaff())
+        ..signIn(TestStaff.people.firstWhere((u) => u.id == 'sarah'));
+      final store = HousekeepingStore(session);
+      phone = Phone._(
+        session,
+        store,
+        HousekeepingSync(
+          store,
+          client: server.client,
+          background: false,
+          timeout: const Duration(milliseconds: 200),
+          discovery: wifi,
+          backupBeforeJoin: () async {},
+        ),
+      );
+    });
+    tearDown(() async {
+      phone.sync.dispose();
+      await phone.session.database.close();
+    });
+
+    test('the only server found is used, whoever is signed in', () async {
+      server.host = '192.168.1.42';
+      wifi.open.add('192.168.1.42:8080');
+      expect(await phone.sync.autoConnect(listen: Duration.zero), isTrue);
+      final view = await phone.sync.refresh();
+      expect(view.server, Uri.parse('http://192.168.1.42:8080'));
+      expect(view.serverId, server.serverId);
+    });
+
+    test('several servers: the Manager chooses', () async {
+      wifi.open.add('192.168.1.42:8080');
+      wifi.announce(
+        FoundServer(
+          id: 'another-server',
+          name: 'PC-2',
+          address: Uri.parse('http://192.168.1.43:8080'),
+        ),
+      );
+      expect(await phone.sync.autoConnect(listen: Duration.zero), isFalse);
+      expect((await phone.sync.refresh()).server, isNull);
+    });
+
+    test('none found, or after "Arrêter": nothing happens', () async {
+      expect(await phone.sync.autoConnect(listen: Duration.zero), isFalse);
+      wifi.open.add('192.168.1.42:8080');
+      await phone.sync.clearServer();
+      expect((await phone.sync.refresh()).autoConnect, isFalse);
+      expect(await phone.sync.autoConnect(listen: Duration.zero), isFalse);
+      await phone.sync.setServer('192.168.1.42');
+      expect((await phone.sync.refresh()).autoConnect, isTrue);
+    });
+  });
+
+  test('a version 9 database upgrades in place: refused actions join the '
+      'log', () async {
+    final path = p.join(directory.path, 'v9.db');
+    var phone = await Phone.open(path, server)
+      ..login('amina');
+    final db = phone.session.database.database;
+    await dropVersion10(db);
+    await db.insert('housekeeping_sync_outbox', {
+      'mutation_id': 'bad-1',
+      'path': '/v1/rooms/305/assign',
+      'body': '{}',
+      'actor_id': 'amina',
+      'applied_at': '2026-11-11T09:00:00.000',
+      'created_at': '2026-11-11T09:00:00.000',
+      'status': 'rejected',
+      'last_error': 'Chemin inconnu.',
+    });
+    await db.update('module_versions', {
+      'version': 9,
+    }, where: "module = 'housekeeping'");
+    phone.sync.dispose();
+    await phone.session.database.close();
+
+    phone = await Phone.open(path, server)
+      ..login('amina');
+    addTearDown(() async {
+      phone.sync.dispose();
+      await phone.session.database.close();
+    });
+    expect(await phone.session.database.versionOf('housekeeping'), 10);
+    expect(await phone.outbox(), isEmpty);
+    final entry = (await phone.sync.refresh()).conflicts.single;
+    expect(entry.mutationId, 'bad-1');
+    expect(entry.merged, isFalse);
+    expect(entry.own, isTrue);
+    expect(entry.message, 'Chemin inconnu.');
+  });
+
   test('a version 8 database upgrades in place, its queue kept', () async {
     final path = p.join(directory.path, 'old.db');
     var phone = await Phone.open(path, server)
@@ -607,7 +949,7 @@ void main() {
       phone.sync.dispose();
       await phone.session.database.close();
     });
-    expect(await phone.session.database.versionOf('housekeeping'), 9);
+    expect(await phone.session.database.versionOf('housekeeping'), 10);
     expect(await phone.outbox(), hasLength(1));
     expect((await phone.sync.refresh()).pending, 1);
     expect(await phone.sync.syncNow(), isTrue);
@@ -850,7 +1192,9 @@ void main() {
       server.inject('/v1/notifications/read', 'amina', {'ids': []});
       expect(await phone.sync.syncNow(), isTrue);
       expect((await phone.sync.refresh()).lastSeq, 1);
+      // Another server, without a copy of the data yet.
       server.serverId = 'a-new-server';
+      server.snapshot = null;
       await phone.sync.setServer('192.168.1.60');
       final view = await phone.sync.refresh();
       expect(view.lastSeq, 0);

@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show gzip;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 import 'app_exception.dart';
+import 'housekeeping_backup.dart';
 import 'http_guard.dart';
 import 'housekeeping_store.dart';
 import 'mutation_meta.dart';
@@ -23,6 +26,16 @@ import 'sync_rebase.dart';
 //     included, and rebuilds the data in the server's order (sync_rebase.dart):
 //     the confirmed version moves forward, the actions still waiting are
 //     applied again on top. A refused action is refused on every phone alike.
+// Live: while the app runs, one request waits at the server
+// (GET /v1/sync/pull?wait=25), which answers as soon as another phone pushes
+// something: their work shows up here within a second. A change made here
+// is sent 0.5 s later. Conflicts resolve themselves (sync_rebase.dart).
+// Joining: a phone connecting to a server for the first time takes the
+// hotel's data from the server's copy (GET /v1/sync/snapshot, a backup is
+// made first), then the actions after it; the phones keep that copy up to
+// date (PUT, every [HousekeepingSync.snapshotEvery] actions).
+// Without a server set, the phone connects by itself to the only Nova Paris
+// server it finds on the Wi-Fi ([HousekeepingSync.autoConnect]).
 // Without network nothing is lost: the queue waits and the sync retries
 // with a growing delay. When the server cannot be reached, the phone also
 // looks for it on the Wi-Fi (server_discovery.dart: its announcements, and a
@@ -33,13 +46,14 @@ import 'sync_rebase.dart';
 /// How the sync is doing, for the badge and the Synchronisation screen.
 enum SyncPhase { off, idle, syncing, offline }
 
-/// A numbered action the rules refused, in the server's order (refused on
-/// every phone alike). [own]: it was made on this phone.
+/// A conflict the sync resolved by itself, the same way on every phone
+/// ("Résolu automatiquement"): [merged] applied on the item's latest
+/// version, else cancelled (not possible any more). [own]: made here.
 class SyncConflict {
   final String mutationId, path, message;
   final String? actorName;
   final DateTime appliedAt;
-  final bool own;
+  final bool own, merged;
   const SyncConflict({
     required this.mutationId,
     required this.path,
@@ -47,15 +61,8 @@ class SyncConflict {
     required this.actorName,
     required this.appliedAt,
     this.own = false,
+    this.merged = false,
   });
-  String get label => describeSyncPath(path);
-}
-
-/// An action of this phone the server refused (malformed).
-class RejectedAction {
-  final String mutationId, path, error;
-  final DateTime appliedAt;
-  const RejectedAction(this.mutationId, this.path, this.error, this.appliedAt);
   String get label => describeSyncPath(path);
 }
 
@@ -68,8 +75,12 @@ class SyncOverview {
   final int pending, lastSeq;
   final DateTime? lastSyncAt;
   final String? lastError;
+
+  /// The "Résolu automatiquement" log, newest first.
   final List<SyncConflict> conflicts;
-  final List<RejectedAction> rejected;
+
+  /// False after "Arrêter": the phone no longer connects by itself.
+  final bool autoConnect;
   const SyncOverview({
     required this.server,
     this.serverId,
@@ -79,7 +90,7 @@ class SyncOverview {
     required this.lastSyncAt,
     required this.lastError,
     required this.conflicts,
-    required this.rejected,
+    this.autoConnect = true,
   });
 }
 
@@ -230,7 +241,14 @@ class _Unreachable implements Exception {
 // One sync service per store (per session), shared by the screens.
 final _services = Expando<HousekeepingSync>('housekeeping sync');
 HousekeepingSync housekeepingSyncFor(HousekeepingStore store) =>
-    _services[store] ??= HousekeepingSync(store);
+    _services[store] ??= HousekeepingSync(
+      store,
+      // Only the hotel's own database connects by itself: never the screen
+      // tour's or a test's (their actions must not reach the hotel).
+      autoConnectOnStart:
+          p.basename(store.session.database.database.path) ==
+          'nova_paris_hotel.db',
+    );
 
 class HousekeepingSync extends ChangeNotifier {
   final HousekeepingStore store;
@@ -247,6 +265,10 @@ class HousekeepingSync extends ChangeNotifier {
   /// Listens for the server on the Wi-Fi; null: typing the address only.
   final ServerDiscovery? discovery;
 
+  /// Without a server set, looks for one at start and every 30 s
+  /// ([autoConnect]).
+  final bool autoConnectOnStart;
+
   /// How long a failed sync listens for its server's announcements (the
   /// scan of the network runs meanwhile, to its end).
   final Duration followWithin;
@@ -254,8 +276,21 @@ class HousekeepingSync extends ChangeNotifier {
   /// How long a scanned address has to answer GET /v1/health.
   final Duration probeTimeout;
 
+  /// How long the live request waits at the server for something new.
+  final Duration liveWait;
+
+  /// Made before a phone takes the server's copy of the data.
+  final Future<void> Function() _backupBeforeJoin;
+
   /// Actions sent or received per request.
   static const pageSize = 50;
+
+  /// The server's copy of the data is renewed every this many actions.
+  static const snapshotEvery = 100;
+
+  /// The log keeps this many entries, for this long.
+  static const logSize = 20;
+  static const logDays = 7;
 
   HousekeepingSync(
     this.store, {
@@ -265,45 +300,85 @@ class HousekeepingSync extends ChangeNotifier {
     DateTime Function()? clock,
     this.background = true,
     ServerDiscovery? discovery,
+    this.autoConnectOnStart = false,
     this.followWithin = const Duration(seconds: 3),
     this.probeTimeout = const Duration(seconds: 2),
+    this.liveWait = const Duration(seconds: 25),
+    Future<void> Function()? backupBeforeJoin,
   }) : _client = client ?? http.Client(),
        clock = clock ?? DateTime.now,
-       discovery = discovery ?? (background ? ServerDiscovery() : null);
+       discovery = discovery ?? (background ? ServerDiscovery() : null),
+       _backupBeforeJoin =
+           backupBeforeJoin ??
+           (() => HousekeepingBackup(store).backupBeforeJoin());
 
   SyncPhase phase = SyncPhase.off;
   SyncOverview? overview;
   int _failures = 0;
   bool _running = false, _again = false, _disposed = false;
-  Timer? _retry, _poll, _debounce;
+  bool _live = false, _connecting = false;
+  Timer? _retry, _poll, _debounce, _search;
   StreamSubscription<void>? _changes;
 
   // ------------------------------------------------------------- lifecycle
 
-  /// Reads the settings; when a server is set, syncs now and keeps syncing.
+  /// Reads the settings; when a server is set, syncs now and keeps syncing;
+  /// otherwise looks for one on the Wi-Fi ([autoConnect]).
   Future<void> start() async {
     await refresh();
-    if (overview?.server != null) _arm();
+    if (overview?.server != null) {
+      _arm();
+    } else {
+      _armSearch();
+    }
+  }
+
+  /// The app came back to the screen: sync at once.
+  Future<void> resumed() async {
+    if (_disposed) return;
+    final view = await refresh();
+    if (view.server != null) {
+      await syncNow();
+    } else {
+      _armSearch();
+    }
   }
 
   void _arm() {
     if (_disposed || !background) return;
-    // After a change on this phone (debounced), and every [pollEvery].
+    _search?.cancel();
+    _search = null;
+    // After a change on this phone (debounced), live while the app runs,
+    // and every [pollEvery] in case the live request is not answered.
     _changes ??= store.changes.listen((_) {
       _debounce?.cancel();
-      _debounce = Timer(const Duration(seconds: 2), () => unawaited(syncNow()));
+      _debounce = Timer(
+        const Duration(milliseconds: 500),
+        () => unawaited(syncNow()),
+      );
     });
     _poll ??= Timer.periodic(pollEvery, (_) => unawaited(syncNow()));
     unawaited(syncNow());
   }
 
+  void _armSearch() {
+    if (_disposed || !background || !autoConnectOnStart || discovery == null) {
+      return;
+    }
+    unawaited(autoConnect());
+    _search ??= Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => unawaited(autoConnect()),
+    );
+  }
+
   void _disarm() {
     _changes?.cancel();
     _changes = null;
-    for (final t in [_poll, _retry, _debounce]) {
+    for (final t in [_poll, _retry, _debounce, _search]) {
       t?.cancel();
     }
-    _poll = _retry = _debounce = null;
+    _poll = _retry = _debounce = _search = null;
   }
 
   @override
@@ -354,14 +429,9 @@ class HousekeepingSync extends ChangeNotifier {
           "WHERE status IN ('pending','sent')",
         ),
       )!;
-      final rejected = await tx.query(
-        'housekeeping_sync_outbox',
-        where: "status = 'rejected'",
-        orderBy: 'created_at',
-      );
       final conflicts = await tx.query(
         'housekeeping_sync_conflicts',
-        orderBy: 'seq DESC',
+        orderBy: 'received_at DESC, seq DESC',
       );
       return SyncOverview(
         server: settings['server_url'] == null
@@ -373,6 +443,7 @@ class HousekeepingSync extends ChangeNotifier {
         lastSeq: int.tryParse(settings['last_seq'] ?? '') ?? 0,
         lastSyncAt: DateTime.tryParse(settings['last_sync_at'] ?? ''),
         lastError: settings['last_error'],
+        autoConnect: settings['auto_connect'] != 'off',
         conflicts: [
           for (final c in conflicts)
             SyncConflict(
@@ -382,15 +453,7 @@ class HousekeepingSync extends ChangeNotifier {
               actorName: c['actor_name'] as String?,
               appliedAt: DateTime.parse(c['applied_at'] as String),
               own: c['own'] == 1,
-            ),
-        ],
-        rejected: [
-          for (final r in rejected)
-            RejectedAction(
-              r['mutation_id'] as String,
-              r['path'] as String,
-              (r['last_error'] as String?) ?? 'Refusée par le serveur.',
-              DateTime.parse(r['applied_at'] as String),
+              merged: c['resolution'] == 'merged',
             ),
         ],
       );
@@ -430,8 +493,12 @@ class HousekeepingSync extends ChangeNotifier {
   Future<void> setServer(String address, {String? expectedId}) async {
     final server = parseServerAddress(address);
     String? id;
+    ({int seq, List<int> data})? copy;
     try {
       id = await _serverIdAt(server);
+      // A server this phone never synced with: take the hotel's data.
+      final known = (await store.syncLedger(_settings))['server_id'];
+      if (id != null && id != known) copy = await _snapshotAt(server);
     } on _Unreachable catch (e) {
       // Saved anyway when typed: the server may simply be off for now.
       if (expectedId != null) throw AppServiceException(e.message);
@@ -454,7 +521,9 @@ class HousekeepingSync extends ChangeNotifier {
       }
       if (id != null) await _set(tx, 'server_id', id);
       await _set(tx, 'server_url', server.toString());
+      await _set(tx, 'auto_connect', null);
     });
+    if (copy != null) await _join(copy);
     // From now on, actions made here wait to be confirmed: the confirmed
     // version starts as the data before them.
     await store.ensureSyncBase((await refresh()).lastSeq);
@@ -506,41 +575,222 @@ class HousekeepingSync extends ChangeNotifier {
     }
   }
 
+  /// Whether using [found] replaces this phone's data with the hotel's
+  /// (a server it never synced with), for the confirmation.
+  bool joins(FoundServer found) => found.id != overview?.serverId;
+
+  /// No server set: connects by itself to the Nova Paris server found on
+  /// the Wi-Fi, when there is exactly one (announcements heard during
+  /// [listen], and the scan). True once connected. Not after "Arrêter".
+  Future<bool> autoConnect({
+    Duration listen = const Duration(seconds: 4),
+  }) async {
+    final finder = discovery;
+    if (finder == null || _connecting || _disposed) return false;
+    final view = await refresh();
+    if (view.server != null || !view.autoConnect) {
+      _search?.cancel();
+      _search = null;
+      return false;
+    }
+    _connecting = true;
+    final found = <String, FoundServer>{};
+    final heard = finder.watch().listen((s) => found[s.id] = s);
+    try {
+      final watch = Stopwatch()..start();
+      await for (final server in scanNetwork()) {
+        found[server.id] = server;
+      }
+      final left = listen - watch.elapsed;
+      if (left > Duration.zero) await Future<void>.delayed(left);
+      await heard.cancel();
+      if (found.length != 1 || _disposed) return false;
+      await useFoundServer(found.values.single);
+      return true;
+    } on AppServiceException {
+      return false;
+    } finally {
+      await heard.cancel();
+      _connecting = false;
+    }
+  }
+
   /// Saves a server found on the Wi-Fi, once it answered with its id.
   Future<void> useFoundServer(FoundServer found) =>
       setServer(found.hostPort, expectedId: found.id);
 
   /// Stops syncing. The queue is kept and sent once a server is set again.
+  /// Stops syncing, and connecting by itself. The queue is kept and sent
+  /// once a server is set again.
   Future<void> clearServer() async {
     _disarm();
-    await store.syncLedger((tx) => _set(tx, 'server_url', null));
+    await store.syncLedger((tx) async {
+      await _set(tx, 'server_url', null);
+      await _set(tx, 'auto_connect', 'off');
+    });
     phase = SyncPhase.off;
     await refresh();
   }
 
-  /// Removes a conflict from the list once the user dealt with it.
-  Future<void> dismissConflict(String mutationId) async {
-    await store.syncLedger(
-      (tx) => tx.delete(
-        'housekeeping_sync_conflicts',
-        where: 'mutation_id = ?',
-        whereArgs: [mutationId],
+  // ------------------------------------------------------- copy of the data
+
+  /// The server's copy of the hotel's data, or null when it has none.
+  Future<({int seq, List<int> data})?> _snapshotAt(Uri server) async {
+    final response = await guardedRequest(
+      () => _client.get(server.replace(path: '/v1/sync/snapshot')),
+      timeout: const Duration(seconds: 60),
+      fail: (_) => throw const _Unreachable(
+        'Serveur injoignable. Vérifiez le Wi-Fi et l’adresse.',
+        network: true,
       ),
     );
-    await refresh();
+    if (response.statusCode != 200) return null;
+    final seq = int.tryParse(response.headers['x-snapshot-seq'] ?? '');
+    return seq == null ? null : (seq: seq, data: response.bodyBytes);
   }
 
-  /// Removes an action the server refused (malformed) from the list; it was
-  /// already taken off this phone's data.
-  Future<void> dismissRejected(String mutationId) async {
-    await store.syncLedger(
-      (tx) => tx.delete(
-        'housekeeping_sync_outbox',
-        where: "mutation_id = ? AND status = 'rejected'",
-        whereArgs: [mutationId],
+  /// Takes the server's copy as this phone's data (after a backup): the
+  /// confirmed version at its number, then this phone's waiting actions on
+  /// top, sent again to this server. False when the copy is unreadable.
+  Future<bool> _join(({int seq, List<int> data}) copy) async {
+    final Map<String, dynamic> state;
+    final Map photos;
+    try {
+      final json = jsonDecode(utf8.decode(gzip.decode(copy.data)));
+      if (json is! Map || json['format'] != 1 || json['state'] is! Map) {
+        return false;
+      }
+      state = (json['state'] as Map).cast<String, dynamic>();
+      photos = json['photos'] is Map ? json['photos'] as Map : const {};
+    } on FormatException {
+      return false;
+    }
+    await _backupBeforeJoin();
+    await store.rebuild((tx, current) async {
+      await HousekeepingStore.saveSyncBase(tx, {
+        ...state,
+        '_photoWrites': photos,
+      }, copy.seq);
+      await HousekeepingStore.writeState(tx, {
+        ...(jsonDecode(jsonEncode(state)) as Map).cast<String, dynamic>(),
+        'users': current['users'],
+      });
+      await tx.update('housekeeping_sync_outbox', {
+        'status': 'pending',
+      }, where: "status = 'sent'");
+      await tx.delete('housekeeping_sync_conflicts');
+      await _set(tx, 'last_seq', '${copy.seq}');
+      await _set(tx, 'snapshot_seq', '${copy.seq}');
+      await _set(tx, 'last_error', null);
+    });
+    await _rebuild(const [], copy.seq);
+    return true;
+  }
+
+  /// Sends this phone's confirmed version as the server's copy when the
+  /// server's is missing or [snapshotEvery] actions old. Not essential: a
+  /// failure waits for the next sync.
+  Future<void> _shareSnapshot(Uri server, String device) async {
+    final (base, known) = await store.syncLedger(
+      (tx) async => (
+        await HousekeepingStore.loadSyncBase(tx),
+        int.tryParse((await _settings(tx))['snapshot_seq'] ?? ''),
       ),
     );
-    await refresh();
+    if (base == null || base.seq < 1) return;
+    if (known != null && base.seq - known < snapshotEvery) return;
+    try {
+      final held = (await _getJson(
+        server.replace(path: '/v1/health'),
+      ))['snapshotSeq'];
+      if (held is int && base.seq - held < snapshotEvery) {
+        await store.syncLedger((tx) => _set(tx, 'snapshot_seq', '$held'));
+        return;
+      }
+      final ids = HousekeepingStore.photoIds(base.state);
+      final photos = await store.syncLedger(
+        (tx) async => {
+          for (final row in await tx.query('housekeeping_photos'))
+            if (ids.contains(row['id'])) row['id'] as String: row['data'],
+        },
+      );
+      final bytes = gzip.encode(
+        utf8.encode(
+          jsonEncode({
+            'format': 1,
+            'seq': base.seq,
+            'state': base.state,
+            'photos': photos,
+          }),
+        ),
+      );
+      final answer = await _send(
+        () => _client.put(
+          server.replace(
+            path: '/v1/sync/snapshot',
+            queryParameters: {'seq': '${base.seq}', 'device': device},
+          ),
+          headers: {
+            'accept': 'application/json',
+            'content-type': 'application/gzip',
+          },
+          body: bytes,
+        ),
+        timeout: const Duration(seconds: 60),
+      );
+      final kept = answer['snapshotSeq'];
+      await store.syncLedger(
+        (tx) => _set(tx, 'snapshot_seq', '${kept is int ? kept : base.seq}'),
+      );
+    } on _Unreachable {
+      // Next sync.
+    }
+  }
+
+  // ------------------------------------------------------------------ live
+
+  /// One request waiting at the server ([liveWait]); syncs when something
+  /// new came. False when the server could not be reached.
+  Future<bool> waitForChanges() async {
+    final view = overview ?? await refresh();
+    final server = view.server;
+    if (server == null) return false;
+    try {
+      final page = await _getJson(
+        server.replace(
+          path: '/v1/sync/pull',
+          queryParameters: {
+            'since': '${view.lastSeq}',
+            'device': view.deviceId,
+            'limit': '1',
+            'wait': '${liveWait.inSeconds}',
+          },
+        ),
+        timeout: liveWait + const Duration(seconds: 10),
+      );
+      final until = page['until'];
+      if ((page['mutations'] as List?)?.isNotEmpty == true ||
+          (until is int && until > view.lastSeq)) {
+        await syncNow();
+      }
+      return true;
+    } on _Unreachable {
+      return false;
+    }
+  }
+
+  // While the app runs: always one request waiting at the server. Stops
+  // when the server cannot be reached (the retries take over).
+  Future<void> _liveLoop() async {
+    if (_live || !background || _disposed) return;
+    _live = true;
+    try {
+      while (!_disposed && _poll != null && overview?.server != null) {
+        if (!await waitForChanges()) break;
+      }
+    } finally {
+      _live = false;
+    }
   }
 
   // ------------------------------------------------------------------ sync
@@ -581,6 +831,7 @@ class HousekeepingSync extends ChangeNotifier {
       }
       await _pull(server, view.deviceId);
       if (view.serverId == null) await _learnServerId(server);
+      await _shareSnapshot(server, view.deviceId);
       _failures = 0;
       _retry?.cancel();
       _retry = null;
@@ -590,6 +841,7 @@ class HousekeepingSync extends ChangeNotifier {
       });
       phase = SyncPhase.idle;
       await refresh();
+      unawaited(_liveLoop());
       return true;
     } on _Unreachable catch (e) {
       if (e.network && !followed && await _followServer(view)) {
@@ -754,20 +1006,30 @@ class HousekeepingSync extends ChangeNotifier {
           whereArgs: [id],
         );
       }
+      Future<void> log(
+        SyncAction a,
+        String message,
+        int status,
+        String resolution,
+      ) => tx.insert('housekeeping_sync_conflicts', {
+        'mutation_id': a.mutationId,
+        'seq': a.seq ?? 0,
+        'path': a.path,
+        'actor_id': a.actorId,
+        'actor_name': authors[a.actorId]?['full_name'],
+        'applied_at': a.appliedAt.toIso8601String(),
+        'message': message,
+        'status': status,
+        'received_at': clock().toIso8601String(),
+        'own': own.contains(a.mutationId) ? 1 : 0,
+        'resolution': resolution,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      for (final a in result.merged) {
+        await log(a, 'Appliquée sur la dernière version.', 409, 'merged');
+      }
       for (final r in result.refused) {
         final mine = own.contains(r.action.mutationId);
-        await tx.insert('housekeeping_sync_conflicts', {
-          'mutation_id': r.action.mutationId,
-          'seq': r.action.seq ?? 0,
-          'path': r.action.path,
-          'actor_id': r.action.actorId,
-          'actor_name': authors[r.action.actorId]?['full_name'],
-          'applied_at': r.action.appliedAt.toIso8601String(),
-          'message': r.message,
-          'status': r.status,
-          'received_at': clock().toIso8601String(),
-          'own': mine ? 1 : 0,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        await log(r.action, r.message, r.status, 'cancelled');
         // Never applied in the end: its id may be used again.
         if (mine) {
           await tx.delete(
@@ -777,9 +1039,21 @@ class HousekeepingSync extends ChangeNotifier {
           );
         }
       }
+      await _pruneLog(tx);
       await _set(tx, 'last_seq', '${result.seq}');
     });
   }
+
+  /// The log keeps its last [logSize] entries of the last [logDays] days.
+  Future<void> _pruneLog(DatabaseExecutor tx) => tx.rawDelete(
+    'DELETE FROM housekeeping_sync_conflicts WHERE received_at < ? OR '
+    'mutation_id NOT IN (SELECT mutation_id FROM housekeeping_sync_conflicts '
+    'ORDER BY received_at DESC, seq DESC LIMIT ?)',
+    [
+      clock().subtract(const Duration(days: logDays)).toIso8601String(),
+      logSize,
+    ],
+  );
 
   /// Sends the queue. Returns true when the server refused an action.
   Future<bool> _push(Uri server, String device) async {
@@ -825,16 +1099,29 @@ class HousekeepingSync extends ChangeNotifier {
               whereArgs: [id],
             );
           } else if (status == 'rejected') {
+            // Malformed: cancelled by itself, kept in the log.
             refused = true;
-            await tx.update(
+            await tx.delete(
               'housekeeping_sync_outbox',
-              {
-                'status': 'rejected',
-                'attempts': (row['attempts'] as int) + 1,
-                'last_error':
-                    '${result?['error'] ?? 'Refusée par le serveur.'}',
-              },
               where: 'mutation_id = ?',
+              whereArgs: [id],
+            );
+            await tx.insert('housekeeping_sync_conflicts', {
+              'mutation_id': id,
+              'seq': 0,
+              'path': row['path'],
+              'actor_id': row['actor_id'],
+              'actor_name': null,
+              'applied_at': row['applied_at'],
+              'message': '${result?['error'] ?? 'Refusée par le serveur.'}',
+              'status': 400,
+              'received_at': clock().toIso8601String(),
+              'own': 1,
+              'resolution': 'cancelled',
+            }, conflictAlgorithm: ConflictAlgorithm.replace);
+            await tx.delete(
+              'housekeeping_mutations',
+              where: 'id = ?',
               whereArgs: [id],
             );
           } else {
@@ -857,8 +1144,10 @@ class HousekeepingSync extends ChangeNotifier {
 
   // ------------------------------------------------------------------ HTTP
 
-  Future<Map<String, dynamic>> _getJson(Uri uri) =>
-      _send(() => _client.get(uri, headers: {'accept': 'application/json'}));
+  Future<Map<String, dynamic>> _getJson(Uri uri, {Duration? timeout}) => _send(
+    () => _client.get(uri, headers: {'accept': 'application/json'}),
+    timeout: timeout,
+  );
 
   Future<Map<String, dynamic>> _postJson(Uri uri, Object body) => _send(
     () => _client.post(
@@ -872,11 +1161,12 @@ class HousekeepingSync extends ChangeNotifier {
   );
 
   Future<Map<String, dynamic>> _send(
-    Future<http.Response> Function() request,
-  ) async {
+    Future<http.Response> Function() request, {
+    Duration? timeout,
+  }) async {
     final response = await guardedRequest(
       request,
-      timeout: timeout,
+      timeout: timeout ?? this.timeout,
       fail: (failure) => throw _Unreachable(switch (failure) {
         NetworkFailure.timeout => 'Le serveur ne répond pas (délai dépassé).',
         NetworkFailure.offline =>
