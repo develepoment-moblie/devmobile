@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -180,4 +181,19 @@ void main() {
     // Done: a later start leaves it alone.
     expect(await fillDemoHotelIfEmpty(store), isNull);
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('the demo photos are real pictures, not plain colours', () async {
+    await fillDemoHotelIfEmpty(store, now: DateTime(2026, 11, 20, 15, 30));
+    final rows = await database.database.query('housekeeping_photos');
+    expect(rows, isNotEmpty);
+    final sizes = [
+      for (final r in rows) base64Decode(r['data'] as String).length,
+    ];
+    // A plain-colour JPEG is about 1 KB; the bundled photos are 20 KB+.
+    expect(sizes.where((n) => n > 15000), hasLength(rows.length));
+    final issuePhotos = await database.database.query(
+      'housekeeping_issue_photos',
+    );
+    expect(issuePhotos, isNotEmpty);
+  });
 }

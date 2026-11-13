@@ -57,6 +57,8 @@ flutter:
   assets:
     - assets/images/nova_paris_logo.png
     - assets/images/nova_paris_logo_light.png
+    # housekeeping: real photos for the demo hotel (credits in the folder)
+    - assets/images/demo_hotel/
     # reservations (Yassmine): room photos
     - assets/images/deluxe.jpg
     - assets/images/double.jpg
