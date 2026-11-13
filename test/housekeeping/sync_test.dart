@@ -59,6 +59,7 @@ class FakeHotelServer {
     if (path == '/v1/health') {
       return reply({
         'status': 'ok',
+        'lastSeq': log.length,
         'serverId': serverId,
         'name': 'PC-ACCUEIL',
         'mutations': log.length,
@@ -860,6 +861,31 @@ void main() {
       final view = await phone.sync.refresh();
       expect(view.server, Uri.parse('http://192.168.1.42:8080'));
       expect(view.serverId, server.serverId);
+    });
+
+    test('a server with a history but no copy yet: waits for one', () async {
+      server.host = '192.168.1.42';
+      wifi.open.add('192.168.1.42:8080');
+      server.inject('/v1/rooms/305/start', 'ghost', {'version': 1});
+      expect(await phone.sync.autoConnect(listen: Duration.zero), isFalse);
+      expect((await phone.sync.refresh()).server, isNull);
+      server.snapshot = (
+        seq: 1,
+        data: gzip.encode(
+          utf8.encode(
+            jsonEncode({
+              'format': 1,
+              'seq': 1,
+              'state': jsonDecode(
+                jsonEncode((await phone.store.readState())..remove('users')),
+              ),
+              'photos': {},
+            }),
+          ),
+        ),
+      );
+      expect(await phone.sync.autoConnect(listen: Duration.zero), isTrue);
+      expect((await phone.sync.refresh()).lastSeq, 1);
     });
 
     test('several servers: the Manager chooses', () async {
