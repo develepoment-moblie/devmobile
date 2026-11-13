@@ -1,10 +1,23 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:sqlite3/sqlite3.dart';
 
 // The server's whole state: the actions of every phone, numbered in the order
 // they arrived (seq). The business rules stay on the phones, which replay
 // these actions through them; the server only collects and hands them out.
+
+/// A random version 4 UUID.
+String newUuid() {
+  final random = Random.secure();
+  final bytes = [for (var i = 0; i < 16; i++) random.nextInt(256)];
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  final hex = [for (final b in bytes) b.toRadixString(16).padLeft(2, '0')];
+  return '${hex.sublist(0, 4).join()}-${hex.sublist(4, 6).join()}-'
+      '${hex.sublist(6, 8).join()}-${hex.sublist(8, 10).join()}-'
+      '${hex.sublist(10).join()}';
+}
 
 final _uuid = RegExp(
   r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
@@ -30,7 +43,23 @@ class SyncLog {
       actor_id TEXT NOT NULL,
       applied_at TEXT NOT NULL,
       received_at TEXT NOT NULL)''');
+    // This server's id, made once: the phones recognise it when its
+    // address changes (see discovery.dart).
+    db.execute('''CREATE TABLE IF NOT EXISTS sync_server (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL)''');
+    db.execute(
+      "INSERT OR IGNORE INTO sync_server (key, value) VALUES ('server_id', ?)",
+      [newUuid()],
+    );
+    serverId =
+        db
+                .select("SELECT value FROM sync_server WHERE key = 'server_id'")
+                .first['value']
+            as String;
   }
+
+  /// Stays the same as long as the log file is kept.
+  late final String serverId;
 
   /// A log in a file (created if needed).
   factory SyncLog.file(String path) => SyncLog(sqlite3.open(path));

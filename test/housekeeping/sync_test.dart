@@ -10,6 +10,7 @@ import 'package:nova_paris/housekeeping/services/housekeeping_store.dart';
 import 'package:nova_paris/housekeeping/services/housekeeping_sync.dart';
 import 'package:nova_paris/housekeeping/services/mutation_meta.dart';
 import 'package:nova_paris/housekeeping/services/room_catalog_backend.dart';
+import 'package:nova_paris/housekeeping/services/server_discovery.dart';
 import 'package:nova_paris/shared/services/app_database.dart';
 import 'package:nova_paris/shared/services/app_session.dart';
 import 'package:path/path.dart' as p;
@@ -27,6 +28,13 @@ class FakeHotelServer {
   bool hang = false;
   int requests = 0;
 
+  /// Its id, as GET /v1/health gives it.
+  String serverId = '9d3c1a2b-5e4f-4a6b-8c7d-1e2f3a4b5c6d';
+
+  /// Reachable only at this address when set (the computer got another one
+  /// from the Wi-Fi).
+  String? host;
+
   // Answers in UTF-8, like the real server.
   http.Response reply(Object body, [int status = 200]) => http.Response.bytes(
     utf8.encode(jsonEncode(body)),
@@ -37,11 +45,17 @@ class FakeHotelServer {
   late final client = MockClient((request) async {
     requests++;
     if (hang) await Completer<void>().future;
-    if (!online) throw const SocketException('Network is unreachable');
+    if (!online || (host != null && request.url.host != host)) {
+      throw const SocketException('Network is unreachable');
+    }
     if (failWith != null) return http.Response('{}', failWith!);
     final path = request.url.path;
     if (path == '/v1/health') {
-      return reply({'status': 'ok', 'mutations': log.length});
+      return reply({
+        'status': 'ok',
+        'serverId': serverId,
+        'mutations': log.length,
+      });
     }
     if (path == '/v1/sync/push') {
       final body = jsonDecode(request.body) as Map<String, dynamic>;
@@ -90,6 +104,26 @@ class FakeHotelServer {
   }
 }
 
+/// The Wi-Fi as a phone hears it: [announcing] is heard by every listener.
+class FakeDiscovery extends ServerDiscovery {
+  final announcing = <FoundServer>[];
+  late final StreamController<FoundServer> _heard = StreamController.broadcast(
+    onListen: () => announcing.forEach(_heard.add),
+  );
+  int listens = 0;
+
+  @override
+  Stream<FoundServer> watch() {
+    listens++;
+    return _heard.stream;
+  }
+
+  void announce(FoundServer server) {
+    announcing.add(server);
+    if (_heard.hasListener) _heard.add(server);
+  }
+}
+
 /// One phone: its own database, session, rules and sync.
 class Phone {
   final AppSession session;
@@ -105,7 +139,11 @@ class Phone {
   /// same install, or the same backup restored).
   static String? template;
 
-  static Future<Phone> open(String path, FakeHotelServer server) async {
+  static Future<Phone> open(
+    String path,
+    FakeHotelServer server, {
+    ServerDiscovery? discovery,
+  }) async {
     if (template != null && !File(path).existsSync()) {
       File(template!).copySync(path);
     }
@@ -121,6 +159,8 @@ class Phone {
       client: server.client,
       background: false,
       timeout: const Duration(milliseconds: 200),
+      discovery: discovery,
+      followWithin: const Duration(milliseconds: 300),
     );
     await sync.setServer('192.168.1.20');
     return Phone._(session, store, sync);
@@ -632,6 +672,137 @@ void main() {
       expect(await supervisor.sync.syncNow(), isFalse);
       expect(server.requests, 0);
       expect(supervisor.sync.phase, SyncPhase.off);
+    });
+  });
+
+  group('server found on the Wi-Fi', () {
+    late FakeDiscovery wifi;
+    late Phone phone;
+    FoundServer at(String host, {String? id}) => FoundServer(
+      id: id ?? server.serverId,
+      name: 'PC-ACCUEIL',
+      address: Uri(scheme: 'http', host: host, port: 8080),
+    );
+    setUp(() async {
+      wifi = FakeDiscovery();
+      phone =
+          await Phone.open(
+              p.join(directory.path, 'wifi.db'),
+              server,
+              discovery: wifi,
+            )
+            ..login('amina');
+    });
+    tearDown(() async {
+      phone.sync.dispose();
+      await phone.session.database.close();
+    });
+
+    test('the server id is kept when the server is set', () async {
+      expect((await phone.sync.refresh()).serverId, server.serverId);
+    });
+
+    test('a typed address of a server that is off: its id comes with the '
+        'first sync', () async {
+      server.online = false;
+      await phone.sync.setServer('192.168.1.30');
+      expect((await phone.sync.refresh()).serverId, isNull);
+      server.online = true;
+      expect(await phone.sync.syncNow(), isTrue);
+      expect((await phone.sync.refresh()).serverId, server.serverId);
+    });
+
+    test('the server moved: the phone follows it and carries on', () async {
+      await phone.act('305', 'assign', {
+        'employeeId': 'sarah',
+        'note': '',
+        'urgent': false,
+      });
+      expect(await phone.sync.syncNow(), isTrue);
+      expect((await phone.sync.refresh()).lastSeq, 1);
+
+      // The computer restarted with another address.
+      server.host = '192.168.1.42';
+      wifi.announce(at('192.168.1.42'));
+      await phone.act('306', 'assign', {
+        'employeeId': 'sarah',
+        'note': '',
+        'urgent': false,
+      });
+      expect(await phone.sync.syncNow(), isTrue);
+      final after = await phone.sync.refresh();
+      expect(after.server, Uri.parse('http://192.168.1.42:8080'));
+      expect(after.lastError, isNull);
+      expect(after.pending, 0);
+      expect(after.lastSeq, 2, reason: 'not read again from the start');
+      expect(phone.sync.phase, SyncPhase.idle);
+    });
+
+    test('another server announcing itself is not followed', () async {
+      server.host = '192.168.1.42';
+      wifi.announce(at('192.168.1.42', id: 'someone-else'));
+      expect(await phone.sync.syncNow(), isFalse);
+      final view = await phone.sync.refresh();
+      expect(view.server, Uri.parse('http://192.168.1.20:8080'));
+      expect(view.lastError, contains('Serveur injoignable'));
+      expect(phone.sync.phase, SyncPhase.offline);
+    });
+
+    test(
+      'an announcement the address does not confirm is not followed',
+      () async {
+        // Announced with the right id, but that address answers with another.
+        final id = server.serverId;
+        server.host = '192.168.1.42';
+        server.serverId = 'replaced';
+        wifi.announce(at('192.168.1.42', id: id));
+        expect(await phone.sync.syncNow(), isFalse);
+        expect(
+          (await phone.sync.refresh()).server,
+          Uri.parse('http://192.168.1.20:8080'),
+        );
+      },
+    );
+
+    test('a server error is no reason to look elsewhere', () async {
+      server.failWith = 500;
+      expect(await phone.sync.syncNow(), isFalse);
+      expect(wifi.listens, 0);
+    });
+
+    test('using a found server checks its id first', () async {
+      await expectLater(
+        phone.sync.useFoundServer(at('192.168.1.20', id: 'someone-else')),
+        throwsA(
+          isA<AppServiceException>().having(
+            (e) => e.message,
+            'message',
+            contains('ne correspond pas'),
+          ),
+        ),
+      );
+      server.online = false;
+      await expectLater(
+        phone.sync.useFoundServer(at('192.168.1.50')),
+        throwsA(isA<AppServiceException>()),
+      );
+      server.online = true;
+      server.host = '192.168.1.50';
+      await phone.sync.useFoundServer(at('192.168.1.50'));
+      final view = await phone.sync.refresh();
+      expect(view.server, Uri.parse('http://192.168.1.50:8080'));
+      expect(view.serverId, server.serverId);
+    });
+
+    test('another server typed by hand starts from its first action', () async {
+      server.inject('/v1/notifications/read', 'amina', {'ids': []});
+      expect(await phone.sync.syncNow(), isTrue);
+      expect((await phone.sync.refresh()).lastSeq, 1);
+      server.serverId = 'a-new-server';
+      await phone.sync.setServer('192.168.1.60');
+      final view = await phone.sync.refresh();
+      expect(view.lastSeq, 0);
+      expect(view.serverId, 'a-new-server');
     });
   });
 
