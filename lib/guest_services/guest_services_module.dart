@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../shared/models/app_user.dart';
@@ -5,6 +7,7 @@ import '../shared/models/nova_module.dart';
 import '../shared/services/app_session.dart';
 import 'screens/guest_services_hub_screen.dart';
 import '../shared/services/app_database.dart';
+import 'services/demo_guest_services.dart';
 import 'services/guest_service_store.dart';
 
 // Entry point of the Services clients module. Owner: à compléter.
@@ -33,6 +36,19 @@ class GuestServicesModule extends NovaModule {
     AppRole.manager,
     AppRole.admin,
   };
+
+  // Presentation build only (NOVA_DEMO_DATA): demo menu, orders, bookings.
+  @override
+  void attach(AppSession session) {
+    if (!novaDemoData) return;
+    unawaited(
+      fillDemoGuestServices(session).then<void>(
+        (_) {},
+        onError: (Object e) =>
+            debugPrint('guest_services: données de démonstration ($e)'),
+      ),
+    );
+  }
 
   @override
   Widget buildHome(BuildContext context, AppSession session) =>
