@@ -4,6 +4,8 @@ import '../shared/models/app_user.dart';
 import '../shared/models/nova_module.dart';
 import '../shared/services/app_session.dart';
 import 'screens/reservations_home_screen.dart';
+import 'services/demo_reservations.dart';
+import 'services/reservation_service.dart';
 
 // Entry point of the Réservations module. Owner: à compléter.
 // Everything for this module lives in lib/reservations/. See lib/reservations/README.md.
@@ -39,6 +41,12 @@ class ReservationsModule extends NovaModule {
   //     }
   //   },
   // );
+
+  // Presentation build only (NOVA_DEMO_DATA): demo bookings.
+  @override
+  void attach(AppSession session) {
+    if (novaDemoData) fillDemoReservations(ReservationService.instance);
+  }
 
   @override
   Widget buildHome(BuildContext context, AppSession session) =>
