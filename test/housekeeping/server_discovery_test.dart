@@ -88,6 +88,42 @@ void main() {
     });
   });
 
+  group('the network scan', () {
+    test('every other address of the phone\'s network', () {
+      final hosts = networkNeighbours('192.168.1.13');
+      expect(hosts, hasLength(253));
+      expect(hosts.first, '192.168.1.1');
+      expect(hosts.last, '192.168.1.254');
+      expect(hosts, isNot(contains('192.168.1.13')));
+      expect(networkNeighbours('10.0.2.15'), contains('10.0.2.2'));
+      expect(networkNeighbours('8.8.8.8'), isEmpty);
+      expect(networkNeighbours('127.0.0.1'), isEmpty);
+      expect(networkNeighbours('fe80::1'), isEmpty);
+    });
+
+    test('yields the open addresses, and stops when cancelled', () async {
+      final scan = _Scanned({'192.168.1.20:8080', '192.168.1.200:9000'});
+      expect(await scan.scan(ports: {8080, 9000}).toList(), [
+        Uri.parse('http://192.168.1.20:8080'),
+        Uri.parse('http://192.168.1.200:9000'),
+      ]);
+      expect(scan.tried, hasLength(253 * 2));
+
+      final early = _Scanned({'192.168.1.2:8080'});
+      await early.scan(parallel: 1).first;
+      expect(early.tried.length, lessThan(10));
+    });
+
+    test('a real closed port on this computer is not open', () async {
+      final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final port = socket.port;
+      final discovery = ServerDiscovery();
+      expect(await discovery.isOpen('127.0.0.1', port), isTrue);
+      await socket.close();
+      expect(await discovery.isOpen('127.0.0.1', port), isFalse);
+    });
+  });
+
   group('listening', () {
     // A free port for each test, so the real port 45454 is never needed.
     Future<int> freePort() async {
@@ -147,4 +183,21 @@ void main() {
       expect(await heard, isNotNull);
     });
   });
+}
+
+/// A network where the [open] host:port pairs accept connections.
+class _Scanned extends ServerDiscovery {
+  final Set<String> open;
+  final tried = <String>[];
+  _Scanned(this.open);
+
+  @override
+  Future<List<String>> ownAddresses() async => ['192.168.1.13'];
+
+  @override
+  Future<bool> isOpen(String host, int port) async {
+    tried.add('$host:$port');
+    await Future<void>.delayed(Duration.zero);
+    return open.contains('$host:$port');
+  }
 }

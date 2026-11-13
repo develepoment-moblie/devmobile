@@ -160,6 +160,17 @@ void main() {
     semantics.dispose();
   });
 
+  testWidgets('broadcasts dropped: the scan finds the server', (tester) async {
+    server.host = '192.168.1.11';
+    wifi.open.add('192.168.1.11:8080');
+    await open(tester);
+    await settleUntil(tester, find.text('PC-ACCUEIL'));
+    expect(find.text('192.168.1.11:8080'), findsOneWidget);
+    await tester.tap(find.text('Utiliser'));
+    await settleUntil(tester, find.text('Serveur enregistré'));
+    await settleUntil(tester, find.text('Utilisé'));
+  });
+
   testWidgets('nothing found: typing the address is offered', (tester) async {
     await open(tester);
     // Let the first read of the database finish (real time), then jump
@@ -174,6 +185,13 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Utiliser'), findsNothing);
+
+    // The server is started afterwards: searching again finds it.
+    server.host = '192.168.1.11';
+    wifi.open.add('192.168.1.11:8080');
+    await tester.tap(find.text('Rechercher de nouveau'));
+    await settleUntil(tester, find.text('PC-ACCUEIL'));
+    expect(find.text('Rechercher de nouveau'), findsNothing);
   });
 
   testWidgets('offline: the badge counts the actions waiting', (tester) async {

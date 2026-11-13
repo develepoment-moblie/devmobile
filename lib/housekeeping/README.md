@@ -166,8 +166,13 @@ d’abord : chaque action est enregistrée sur le téléphone, puis envoyée.
   par `GET /v1/health`. L’adresse retenue est celle d’où vient l’annonce
   (jamais une adresse écrite dedans), et elle doit être du réseau local.
   L’identifiant du serveur est gardé dans `housekeeping_sync_state`
-  (`server_id`). Si le serveur ne répond plus, le téléphone écoute 3 s : le
-  même serveur (même identifiant, vérifié) à une autre adresse est suivi
+  (`server_id`). Beaucoup de téléphones et de box suppriment ces annonces
+  (constaté sur le Xiaomi) : le téléphone parcourt donc aussi son réseau
+  (x.y.z.1 à .254, port 8080 et port du serveur enregistré, environ 2 s) et
+  demande `GET /v1/health` là où le port répond ; bouton « Rechercher de
+  nouveau ». Si le serveur ne répond plus, le téléphone écoute 3 s et
+  parcourt le réseau : le même serveur (même identifiant, vérifié) à une
+  autre adresse est suivi
   automatiquement et la synchronisation reprend là où elle en était ; un
   autre serveur n’est jamais suivi. Saisir l’adresse reste possible (Wi-Fi
   qui bloque les annonces, émulateur : `10.0.2.2:8080`).
@@ -252,7 +257,7 @@ services/
   dashboard_queries.dart        requêtes SQL du tableau de bord
   housekeeping_backup.dart      sauvegarde et restauration du module
   housekeeping_sync.dart        synchronisation avec le serveur (envoi, réception, conflits)
-  server_discovery.dart         serveur de l’hôtel trouvé sur le Wi-Fi (annonces UDP)
+  server_discovery.dart         serveur de l’hôtel trouvé sur le Wi-Fi (annonces UDP, parcours du réseau)
   http_guard.dart               appels web : délai, absence de réseau, réponse JSON
   demo_hotel.dart               hôtel de démonstration (option de compilation)
   product_lookup.dart           fiche produit depuis un code-barres (Open Beauty / Food Facts)

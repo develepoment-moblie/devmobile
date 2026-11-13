@@ -54,6 +54,7 @@ class FakeHotelServer {
       return reply({
         'status': 'ok',
         'serverId': serverId,
+        'name': 'PC-ACCUEIL',
         'mutations': log.length,
       });
     }
@@ -104,9 +105,23 @@ class FakeHotelServer {
   }
 }
 
-/// The Wi-Fi as a phone hears it: [announcing] is heard by every listener.
+/// The Wi-Fi as a phone sees it: [announcing] is heard by every listener;
+/// the scan finds the port open on the [open] addresses of [own]'s network.
 class FakeDiscovery extends ServerDiscovery {
   final announcing = <FoundServer>[];
+  List<String> own = ['192.168.1.13'];
+  final open = <String>{};
+  final tried = <String>[];
+
+  @override
+  Future<List<String>> ownAddresses() async => own;
+
+  @override
+  Future<bool> isOpen(String host, int port) async {
+    tried.add('$host:$port');
+    return open.contains('$host:$port');
+  }
+
   late final StreamController<FoundServer> _heard = StreamController.broadcast(
     onListen: () => announcing.forEach(_heard.add),
   );
@@ -764,10 +779,47 @@ void main() {
       },
     );
 
+    test('broadcasts dropped: the scan finds the server that moved', () async {
+      expect(await phone.sync.syncNow(), isTrue);
+      server.host = '192.168.1.42';
+      wifi.open.add('192.168.1.42:8080');
+      expect(await phone.sync.syncNow(), isTrue);
+      expect(
+        (await phone.sync.refresh()).server,
+        Uri.parse('http://192.168.1.42:8080'),
+      );
+    });
+
+    test('the scan lists the Nova Paris servers of the network only', () async {
+      server.host = '192.168.1.42';
+      // .7 has the port open but is not a Nova Paris server.
+      wifi.open.addAll({'192.168.1.42:8080', '192.168.1.7:8080'});
+      final found = await phone.sync.scanNetwork().toList();
+      expect(found, [
+        FoundServer(
+          id: server.serverId,
+          name: 'PC-ACCUEIL',
+          address: Uri.parse('http://192.168.1.42:8080'),
+        ),
+      ]);
+      expect(wifi.tried, hasLength(253), reason: '.1 to .254, not itself');
+      expect(wifi.tried, isNot(contains('192.168.1.13:8080')));
+    });
+
+    test('the scan tries the saved server\'s port too', () async {
+      server.online = false;
+      await phone.sync.setServer('192.168.1.20:9000');
+      server.online = true;
+      await phone.sync.scanNetwork().toList();
+      expect(wifi.tried, contains('192.168.1.5:9000'));
+      expect(wifi.tried, contains('192.168.1.5:8080'));
+    });
+
     test('a server error is no reason to look elsewhere', () async {
       server.failWith = 500;
       expect(await phone.sync.syncNow(), isFalse);
       expect(wifi.listens, 0);
+      expect(wifi.tried, isEmpty);
     });
 
     test('using a found server checks its id first', () async {

@@ -37,8 +37,11 @@ seuls. Supprimer `data/nova_sync.db` crée un nouveau serveur : les téléphones
 devront le choisir de nouveau.
 
 Les annonces partent vers `255.255.255.255` et vers l’adresse de diffusion de
-chaque carte réseau (réseau en /24 supposé). Certains Wi-Fi (invités,
-écoles) bloquent ces messages : saisir l’adresse reste possible.
+chaque carte réseau (réseau en /24 supposé). Beaucoup de téléphones et de
+box les suppriment : l’application parcourt alors son réseau et demande
+`/v1/health` à chaque adresse où le port 8080 répond. Lancé avec un autre
+port, le serveur doit être saisi la première fois ; saisir l’adresse reste
+toujours possible.
 
 ## API
 
