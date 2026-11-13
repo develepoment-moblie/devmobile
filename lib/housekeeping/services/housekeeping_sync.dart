@@ -25,8 +25,9 @@ import 'sync_rebase.dart';
 //     applied again on top. A refused action is refused on every phone alike.
 // Without network nothing is lost: the queue waits and the sync retries
 // with a growing delay. When the server cannot be reached, the phone also
-// listens a few seconds on the Wi-Fi (server_discovery.dart): if the same
-// server (same id) announces itself at another address, it follows it. A repeated mutationId changes nothing, on the
+// looks for it on the Wi-Fi (server_discovery.dart: its announcements, and a
+// scan of the network): if the same server (same id) answers at another
+// address, it follows it. A repeated mutationId changes nothing, on the
 // phone as on the server, so retrying is always safe.
 
 /// How the sync is doing, for the badge and the Synchronisation screen.
@@ -246,8 +247,12 @@ class HousekeepingSync extends ChangeNotifier {
   /// Listens for the server on the Wi-Fi; null: typing the address only.
   final ServerDiscovery? discovery;
 
-  /// How long a failed sync listens for its server's new address.
+  /// How long a failed sync listens for its server's announcements (the
+  /// scan of the network runs meanwhile, to its end).
   final Duration followWithin;
+
+  /// How long a scanned address has to answer GET /v1/health.
+  final Duration probeTimeout;
 
   /// Actions sent or received per request.
   static const pageSize = 50;
@@ -261,6 +266,7 @@ class HousekeepingSync extends ChangeNotifier {
     this.background = true,
     ServerDiscovery? discovery,
     this.followWithin = const Duration(seconds: 3),
+    this.probeTimeout = const Duration(seconds: 2),
   }) : _client = client ?? http.Client(),
        clock = clock ?? DateTime.now,
        discovery = discovery ?? (background ? ServerDiscovery() : null);
@@ -458,6 +464,48 @@ class HousekeepingSync extends ChangeNotifier {
     _arm();
   }
 
+  /// The Nova Paris servers of this phone's network, as they answer: every
+  /// address where the server's port is open is asked GET /v1/health. The
+  /// port of the server already set is tried too.
+  Stream<FoundServer> scanNetwork() async* {
+    final finder = discovery;
+    if (finder == null) return;
+    final current = overview?.server;
+    final ports = {
+      defaultServerPort,
+      if (current != null && current.scheme == 'http') current.port,
+    };
+    await for (final candidate in finder.scan(ports: ports)) {
+      final server = await _probe(candidate);
+      if (server != null) yield server;
+    }
+  }
+
+  /// The server at [base] (GET /v1/health with its id), or null when nothing
+  /// or something else answers there.
+  Future<FoundServer?> _probe(Uri base) async {
+    try {
+      final response = await _client
+          .get(
+            base.replace(path: '/v1/health'),
+            headers: {'accept': 'application/json'},
+          )
+          .timeout(probeTimeout);
+      if (response.statusCode != 200) return null;
+      final health = jsonObject(response);
+      final id = health?['serverId'];
+      if (id is! String || id.isEmpty || id.length > 64) return null;
+      return FoundServer(
+        id: id,
+        name: serverLabel(health!['name']),
+        address: base,
+      );
+    } on Exception {
+      // Another program on that port, or it stopped answering.
+      return null;
+    }
+  }
+
   /// Saves a server found on the Wi-Fi, once it answered with its id.
   Future<void> useFoundServer(FoundServer found) =>
       setServer(found.hostPort, expectedId: found.id);
@@ -574,7 +622,7 @@ class HousekeepingSync extends ChangeNotifier {
   Future<bool> _followServer(SyncOverview view) async {
     final id = view.serverId, current = view.server, finder = discovery;
     if (finder == null || id == null || current == null) return false;
-    final found = await finder.find(id, followWithin);
+    final found = await _locate(id, finder);
     if (found == null || found.address == current || _disposed) return false;
     try {
       if (await _serverIdAt(found.address) != id) return false;
@@ -585,6 +633,29 @@ class HousekeepingSync extends ChangeNotifier {
       (tx) => _set(tx, 'server_url', found.address.toString()),
     );
     return true;
+  }
+
+  /// Server [id], by its announcements or the scan, whichever finds it
+  /// first; null when neither does.
+  Future<FoundServer?> _locate(String id, ServerDiscovery finder) {
+    final done = Completer<FoundServer?>();
+    var searching = 2;
+    void finish(FoundServer? server) {
+      if (done.isCompleted) return;
+      if (server != null) {
+        done.complete(server);
+      } else if (--searching == 0) {
+        done.complete(null);
+      }
+    }
+
+    finder.find(id, followWithin).then(finish, onError: (_) => finish(null));
+    scanNetwork()
+        .where((s) => s.id == id)
+        .cast<FoundServer?>()
+        .firstWhere((_) => true, orElse: () => null)
+        .then(finish, onError: (_) => finish(null));
+    return done.future;
   }
 
   /// 5 s, 10 s, 20 s… up to 5 minutes between attempts.

@@ -25,13 +25,16 @@ class _SyncScreenState extends State<SyncScreen>
   final address = TextEditingController();
   String? check;
 
-  /// Servers heard on the Wi-Fi while the screen is open, by id.
+  /// Servers found on the Wi-Fi while the screen is open, by id.
   final found = <String, FoundServer>{};
-  StreamSubscription<FoundServer>? _listening;
+  StreamSubscription<FoundServer>? _listening, _scan;
   Timer? _searching;
 
   /// Listened long enough to say nothing was found.
   bool searched = false;
+
+  /// The scan of the network is running.
+  bool scanning = false;
 
   @override
   Listenable get listenable => widget.sync;
@@ -39,28 +42,54 @@ class _SyncScreenState extends State<SyncScreen>
   @override
   void initState() {
     super.initState();
-    widget.sync.refresh().then((view) {
-      if (mounted && address.text.isEmpty && view.server != null) {
-        address.text = '${view.server!.host}:${view.server!.port}';
-      }
-    }, onError: (Object e) => setState(() => error = e.toString()));
     final discovery = widget.sync.discovery;
-    if (discovery != null) {
-      _listening = discovery.watch().listen((server) {
-        if (mounted && found[server.id] != server) {
-          setState(() => found[server.id] = server);
-        }
-      });
-      // The server announces itself every 2 seconds.
-      _searching = Timer(const Duration(seconds: 10), () {
-        if (mounted) setState(() => searched = true);
-      });
+    widget.sync
+        .refresh()
+        .then((view) {
+          if (mounted && address.text.isEmpty && view.server != null) {
+            address.text = '${view.server!.host}:${view.server!.port}';
+          }
+        }, onError: (Object e) => setState(() => error = e.toString()))
+        // The scan tries the saved server's port too: read it first.
+        .whenComplete(() {
+          if (mounted && discovery != null) _search();
+        });
+    if (discovery != null) _listening = discovery.watch().listen(_heard);
+  }
+
+  void _heard(FoundServer server) {
+    if (mounted && found[server.id] != server) {
+      setState(() => found[server.id] = server);
     }
+  }
+
+  /// Scans the network (the announcements are listened to all along).
+  void _search() {
+    _scan?.cancel();
+    _searching?.cancel();
+    setState(() {
+      scanning = true;
+      searched = false;
+    });
+    void done() {
+      if (mounted) setState(() => scanning = false);
+    }
+
+    _scan = widget.sync.scanNetwork().listen(
+      _heard,
+      onDone: done,
+      onError: (Object _) => done(),
+    );
+    // The server announces itself every 2 seconds.
+    _searching = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() => searched = true);
+    });
   }
 
   @override
   void dispose() {
     _listening?.cancel();
+    _scan?.cancel();
     _searching?.cancel();
     address.dispose();
     super.dispose();
@@ -110,14 +139,14 @@ class _SyncScreenState extends State<SyncScreen>
           if (sync.discovery != null) ...[
             const _Heading(
               'Serveurs trouvés sur le Wi-Fi',
-              'Le serveur de l’hôtel s’annonce sur ce réseau.',
+              'Le téléphone cherche le serveur de l’hôtel sur ce réseau.',
             ),
             if (found.isEmpty)
               _Line(
                 Icons.wifi_find,
-                searched
-                    ? 'Aucun serveur trouvé. Saisissez l’adresse ci-dessous.'
-                    : 'Recherche d’un serveur sur le Wi-Fi…',
+                scanning || !searched
+                    ? 'Recherche d’un serveur sur le Wi-Fi…'
+                    : 'Aucun serveur trouvé. Saisissez l’adresse ci-dessous.',
                 AppColors.muted,
               ),
             for (final server in found.values)
@@ -128,6 +157,15 @@ class _SyncScreenState extends State<SyncScreen>
                     view?.server == server.address &&
                     view?.serverId == server.id,
                 onUse: busy ? null : () => _use(server),
+              ),
+            if (!scanning && searched)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: busy ? null : _search,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Rechercher de nouveau'),
+                ),
               ),
             const SizedBox(height: 14),
           ],
